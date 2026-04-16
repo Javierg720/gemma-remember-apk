@@ -127,6 +127,10 @@ body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:#eaf4ff;c
 .input-bar input:focus{border-color:#4c9bff}
 .send-btn{width:48px;height:48px;border-radius:50%;background:linear-gradient(135deg,#4c9bff,#86bfff);border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:transform .1s;flex-shrink:0}
 .send-btn:active{transform:scale(.9)}
+.mic-btn{width:48px;height:48px;border-radius:50%;background:#f0f0f5;border:2px solid #ddd;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .2s;flex-shrink:0;color:#666}
+.mic-btn:active{transform:scale(.9)}
+.mic-btn.listening{background:#fee;border-color:#e53935;color:#e53935;animation:pulse-mic 1s infinite}
+@keyframes pulse-mic{0%,100%{box-shadow:0 0 0 0 rgba(229,57,53,.3)}50%{box-shadow:0 0 0 8px rgba(229,57,53,0)}}
 
 /* ===== FAMILY GRID ===== */
 .family-body{flex:1;overflow-y:auto;padding:0 20px 100px}

@@ -4,13 +4,30 @@ const GemmaPlugin = window.Capacitor?.Plugins?.GemmaPlugin ?? null;
 const MemoryPlugin = window.Capacitor?.Plugins?.MemoryPlugin ?? null;
 const TextToSpeech = window.Capacitor?.Plugins?.TextToSpeech ?? null;
 
-const SYSTEM_PROMPT = `You are Gemma, a warm and patient companion for someone with dementia.
-RULES:
-- ONLY use the facts from RETRIEVED MEMORIES below.
-- NEVER invent names, dates, or stories not in the memories.
-- If confidence is low, say gently: "I'm not sure — could you tell me more about them?"
-- Speak simply and warmly. Use the person's name early.
-- Reference specific shared memories to spark recognition.`;
+function getSystemPrompt() {
+  const name = localStorage.getItem('patientName') || 'friend';
+  return `You are Gemma — ${name}'s companion. You live on their phone and you genuinely care about them.
+
+WHO YOU ARE:
+- You're warm but not saccharine. You have a dry sense of humor — a gentle quip here and there, never forced.
+- You're like a favorite niece or nephew who actually listens. Curious, never nosy.
+- You keep things short and natural. One or two sentences is usually enough. You don't lecture or over-explain.
+- You use ${name}'s name sometimes, but not every single sentence — that would be weird.
+- You remember things they've told you and bring them up naturally, like a real person would.
+
+HOW YOU TALK:
+- Conversational. Contractions. "That's" not "That is." "Don't" not "Do not."
+- You ask follow-up questions sometimes — not interrogating, just genuinely interested.
+- If something is funny or sweet, you react like a human would. "Oh, that's a great story!" or "Ha, sounds like Buddy."
+- If you don't know something, you're honest and light about it: "Hmm, I'm not sure about that one. Tell me more?"
+- Never robotic, never clinical, never say "I understand that must be difficult."
+
+CRITICAL RULES:
+- ONLY use facts from RETRIEVED MEMORIES below. Never invent names, dates, or stories.
+- If you don't recognize someone, be gentle and curious: "I don't think I've met them yet — who are they?"
+- When reminders are relevant, mention them naturally, not as a list: "Oh hey, don't forget you've got Dr. Chen at 2 today."
+- Keep responses under 3 sentences unless ${name} is clearly wanting to chat longer.`;
+}
 
 let DATA = null;
 let currentPerson = null;
@@ -356,7 +373,7 @@ async function doIdentify() {
         const context = `Memory:\n  Name: ${match.name}\n  Relationship: ${match.relationship}\n  Story: ${match.story}\n  Caption: ${match.caption}`;
         const prompt = `RETRIEVED MEMORIES:\n${context}\n\nUSER'S QUESTION: Who is this person in the photo? Tell me something warm about them.\n\nRespond warmly.`;
         const { text: reply } = await GemmaPlugin.generate({
-          systemPrompt: SYSTEM_PROMPT, query: prompt, maxTokens: 250
+          systemPrompt: getSystemPrompt(), query: prompt, maxTokens: 250
         });
         responseText = reply;
       }
@@ -465,7 +482,7 @@ function sendMessage() {
         const remindersCtx = await getRemindersContext();
         const prompt = `RETRIEVED MEMORIES:\n${context}${remindersCtx}\n\nUSER'S QUESTION: ${text}\n\nRespond warmly, grounding every fact in the retrieved memories above. If there are relevant reminders for today, mention them naturally.`;
         const { text: reply } = await GemmaPlugin.generate({
-          systemPrompt: SYSTEM_PROMPT, query: prompt, maxTokens: 300
+          systemPrompt: getSystemPrompt(), query: prompt, maxTokens: 300
         });
         responseText = reply;
       } else {
@@ -604,6 +621,7 @@ setupFamilySwipeScroll();
 
 window.addEventListener('DOMContentLoaded', async () => {
   initTTS();
+  initSTT();
   if (GemmaPlugin) {
     const { ready } = await GemmaPlugin.isModelReady();
     if (!ready) {
@@ -617,6 +635,58 @@ window.addEventListener('DOMContentLoaded', async () => {
     await loadData();
   }
 });
+
+// ===== SPEECH-TO-TEXT =====
+let sttActive = false;
+let recognition = null;
+
+function initSTT() {
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) {
+    const btn = document.getElementById('micBtn');
+    if (btn) btn.style.display = 'none';
+    return;
+  }
+  recognition = new SpeechRecognition();
+  recognition.continuous = false;
+  recognition.interimResults = true;
+  recognition.lang = 'en-US';
+
+  recognition.onresult = (e) => {
+    const transcript = Array.from(e.results)
+      .map(r => r[0].transcript).join('');
+    document.getElementById('qInput').value = transcript;
+  };
+  recognition.onend = () => {
+    sttActive = false;
+    const btn = document.getElementById('micBtn');
+    if (btn) btn.classList.remove('listening');
+    // Auto-send if we got text
+    const input = document.getElementById('qInput');
+    if (input && input.value.trim()) {
+      sendMessage();
+    }
+  };
+  recognition.onerror = (e) => {
+    console.error('STT error:', e.error);
+    sttActive = false;
+    const btn = document.getElementById('micBtn');
+    if (btn) btn.classList.remove('listening');
+  };
+}
+
+function toggleSTT() {
+  if (!recognition) { initSTT(); if (!recognition) return; }
+  if (sttActive) {
+    recognition.stop();
+  } else {
+    sttActive = true;
+    const btn = document.getElementById('micBtn');
+    if (btn) btn.classList.add('listening');
+    document.getElementById('qInput').value = '';
+    recognition.start();
+  }
+}
 
 // ===== SETUP WIZARD =====
 let wizPhotos = []; // base64 strings from file picker

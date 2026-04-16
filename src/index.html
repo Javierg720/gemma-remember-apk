@@ -244,6 +244,9 @@
           <div id="messages"></div>
         </div>
         <div class="input-bar">
+          <button class="mic-btn" id="micBtn" onclick="toggleSTT()" title="Speak">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="2" width="6" height="11" rx="3"/><path d="M5 10a7 7 0 0014 0"/><line x1="12" y1="19" x2="12" y2="23"/></svg>
+          </button>
           <input type="text" id="qInput" placeholder="Ask about someone..." autocomplete="off">
           <button class="send-btn" id="sendBtn" onclick="sendMessage()">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4z"/></svg>
