@@ -4,7 +4,7 @@ const GemmaPlugin = window.Capacitor?.Plugins?.GemmaPlugin ?? null;
 const MemoryPlugin = window.Capacitor?.Plugins?.MemoryPlugin ?? null;
 const TextToSpeech = window.Capacitor?.Plugins?.TextToSpeech ?? null;
 
-const SYSTEM_PROMPT = `You are Memory Anchor, a warm and patient companion for someone with dementia.
+const SYSTEM_PROMPT = `You are Gemma, a warm and patient companion for someone with dementia.
 RULES:
 - ONLY use the facts from RETRIEVED MEMORIES below.
 - NEVER invent names, dates, or stories not in the memories.
