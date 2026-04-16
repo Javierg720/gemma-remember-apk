@@ -1,4 +1,17 @@
 // ===== DATA =====
+// ===== CAPACITOR PLUGINS =====
+const GemmaPlugin = window.Capacitor?.Plugins?.GemmaPlugin ?? null;
+const MemoryPlugin = window.Capacitor?.Plugins?.MemoryPlugin ?? null;
+const TextToSpeech = window.Capacitor?.Plugins?.TextToSpeech ?? null;
+
+const SYSTEM_PROMPT = `You are Memory Anchor, a warm and patient companion for someone with dementia.
+RULES:
+- ONLY use the facts from RETRIEVED MEMORIES below.
+- NEVER invent names, dates, or stories not in the memories.
+- If confidence is low, say gently: "I'm not sure — could you tell me more about them?"
+- Speak simply and warmly. Use the person's name early.
+- Reference specific shared memories to spark recognition.`;
+
 let DATA = null;
 let currentPerson = null;
 let currentScreenId = 'splash';
@@ -13,35 +26,17 @@ function initTTS() {
 
 async function speak(text) {
   if (!ttsEnabled || !text) return;
-
-  // Stop any currently playing audio
   stopSpeaking();
-
   try {
-    const response = await fetch('/api/tts', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text })
-    });
-
-    if (!response.ok) throw new Error('TTS API failed');
-
-    const data = await response.json();
-    const audioBlob = base64ToBlob(data.audio, 'audio/mpeg');
-    const audioUrl = URL.createObjectURL(audioBlob);
-
-    currentAudio = new Audio(audioUrl);
-    currentAudio.play();
-    currentAudio.onended = () => URL.revokeObjectURL(audioUrl);
-
-  } catch (err) {
-    console.error('TTS error:', err);
-    // Fallback to browser TTS
-    if ('speechSynthesis' in window) {
+    if (TextToSpeech) {
+      await TextToSpeech.speak({ text, lang: 'en-US', rate: 0.9 });
+    } else if ('speechSynthesis' in window) {
       const utterance = new SpeechSynthesisUtterance(text);
       utterance.rate = 0.9;
       speechSynthesis.speak(utterance);
     }
+  } catch (err) {
+    console.error('TTS error:', err);
   }
 }
 
@@ -76,8 +71,14 @@ function toggleTTS() {
 }
 
 async function loadData() {
-  const res = await fetch('responses.json');
-  DATA = await res.json();
+  if (MemoryPlugin) {
+    const { profiles } = await MemoryPlugin.getAllProfiles();
+    DATA = { photo_queries: {}, text_queries: {} };
+    profiles.forEach(p => { DATA.photo_queries[p.id] = p; });
+  } else {
+    const res = await fetch('responses.json');
+    DATA = await res.json();
+  }
   renderFamily();
   setTimeOfDay();
 }
@@ -316,39 +317,52 @@ fileInput.addEventListener('change', function() {
   reader.readAsDataURL(file);
 });
 
-function doIdentify() {
+async function doIdentify() {
   if (!DATA) return;
-
-  // Show loading
   const loading = document.getElementById('loading');
   loading.hidden = false;
 
-  // Simulate inference delay
-  setTimeout(() => {
-    // Pick a random family member for demo (in real app, CLIP would match)
-    const keys = Object.keys(DATA.photo_queries);
-    const key = keys[Math.floor(Math.random() * keys.length)];
-    const p = DATA.photo_queries[key];
+  try {
+    const imageBase64 = preview.src.split(',')[1];
+    let name, relationship, responseText;
 
-    document.getElementById('resultName').textContent = p.name;
-    document.getElementById('resultRel').textContent = p.relationship;
-    document.getElementById('resultText').textContent = p.response;
+    if (GemmaPlugin && MemoryPlugin && imageBase64) {
+      const match = await MemoryPlugin.findByImage({ imageBase64 });
+      if (!match.found) {
+        responseText = "I'm not sure who this is. Would you like to tell me about them so I can remember next time?";
+        name = "Unknown";
+        relationship = "";
+      } else {
+        name = match.name;
+        relationship = match.relationship;
+        const context = `Memory:\n  Name: ${match.name}\n  Relationship: ${match.relationship}\n  Story: ${match.story}\n  Caption: ${match.caption}`;
+        const prompt = `RETRIEVED MEMORIES:\n${context}\n\nUSER'S QUESTION: Who is this person in the photo? Tell me something warm about them.\n\nRespond warmly.`;
+        const { text: reply } = await GemmaPlugin.generate({
+          systemPrompt: SYSTEM_PROMPT, query: prompt, maxTokens: 250
+        });
+        responseText = reply;
+      }
+    } else {
+      const keys = Object.keys(DATA.photo_queries);
+      const key = keys[Math.floor(Math.random() * keys.length)];
+      const p = DATA.photo_queries[key];
+      name = p.name; relationship = p.relationship; responseText = p.response;
+    }
 
-    const avatar = document.getElementById('resultAvatar');
-    const initials = getInitials(p.name);
-    avatar.style.background = getAvatarGradient(p.color);
-    avatar.innerHTML = `
-      <img src="${avatarImagePath(key)}" alt="${p.name}" onload="this.nextElementSibling.style.display='none'" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex'">
-      <span class="avatar-fallback">${initials}</span>
-    `;
+    document.getElementById('resultName').textContent = name;
+    document.getElementById('resultRel').textContent = relationship;
+    document.getElementById('resultText').textContent = responseText;
 
     document.getElementById('identifyResult').hidden = false;
     document.getElementById('identifyActions').hidden = true;
+    speak(responseText);
+  } catch (e) {
+    document.getElementById('resultText').textContent =
+      "I had trouble recognizing that photo. Please try again.";
+    console.error(e);
+  } finally {
     loading.hidden = true;
-
-    // Speak the identification result
-    speak(p.response);
-  }, 1800);
+  }
 }
 
 function resetIdentify() {
@@ -389,28 +403,45 @@ function sendMessage() {
   if (!text || !DATA) return;
   qInput.value = '';
 
-  // Hide welcome & suggestions after first message
   const empty = document.querySelector('.chat-empty');
   if (empty) empty.style.display = 'none';
   const sug = document.getElementById('askChips');
   if (sug) sug.style.display = 'none';
 
-  // User message
   addMessage(text, 'user');
 
-  // Typing indicator
   const typing = document.createElement('div');
   typing.className = 'msg-typing';
   typing.innerHTML = '<div class="typing-dots"><span></span><span></span><span></span></div>';
   messagesEl.appendChild(typing);
   scrollChat();
 
-  // Find response
-  setTimeout(() => {
+  (async () => {
     typing.remove();
-    const result = findResponse(text);
-    addMessage(result.text, 'bot', result.personKey || null);
-  }, 1200 + Math.random() * 800);
+    try {
+      let responseText;
+      if (GemmaPlugin && MemoryPlugin) {
+        const { matches, found } = await MemoryPlugin.findByText({ query: text });
+        const context = found
+          ? matches.map((m, i) =>
+              `Memory ${i+1}:\n  Name: ${m.name}\n  Relationship: ${m.relationship}\n  Story: ${m.story}\n  Caption: ${m.caption}`
+            ).join('\n\n')
+          : 'No matching family memories found.';
+        const prompt = `RETRIEVED MEMORIES:\n${context}\n\nUSER'S QUESTION: ${text}\n\nRespond warmly, grounding every fact in the retrieved memories above.`;
+        const { text: reply } = await GemmaPlugin.generate({
+          systemPrompt: SYSTEM_PROMPT, query: prompt, maxTokens: 300
+        });
+        responseText = reply;
+      } else {
+        responseText = findResponse(text).text;
+      }
+      addMessage(responseText, 'bot', null);
+      speak(responseText);
+    } catch (e) {
+      addMessage("I'm having trouble remembering right now. Please try again.", 'bot', null);
+      console.error(e);
+    }
+  })();
 }
 
 function findResponse(query) {
@@ -500,7 +531,58 @@ function scrollChat() {
 }
 
 // ===== INIT =====
-initTTS();
 setupSwipeNavigation();
 setupFamilySwipeScroll();
-loadData();
+
+window.addEventListener('DOMContentLoaded', async () => {
+  initTTS();
+  if (GemmaPlugin) {
+    const { ready } = await GemmaPlugin.isModelReady();
+    if (!ready) {
+      showScreen('modelSetup');
+      return;
+    }
+  }
+  await loadData();
+});
+
+// ===== MODEL SETUP =====
+async function startModelDownload() {
+  const btn = document.getElementById('startDownloadBtn');
+  const progressArea = document.getElementById('setupProgressArea');
+  const bar = document.getElementById('modelProgressBar');
+  const label = document.getElementById('modelProgressLabel');
+
+  btn.disabled = true;
+  btn.textContent = 'Downloading…';
+  progressArea.hidden = false;
+
+  if (!GemmaPlugin) {
+    label.textContent = 'Browser mode — no download needed.';
+    setTimeout(async () => { await loadData(); showScreen('home'); }, 1200);
+    return;
+  }
+
+  GemmaPlugin.addListener('downloadProgress', ({ percent, downloaded, total }) => {
+    const pct = percent >= 0 ? percent : Math.round((downloaded / total) * 100);
+    bar.style.width = pct + '%';
+    const mb = Math.round(downloaded / 1024 / 1024);
+    const totalMb = Math.round(total / 1024 / 1024);
+    label.textContent = `${mb} MB / ${totalMb} MB (${pct}%)`;
+  });
+
+  try {
+    await GemmaPlugin.downloadModel({
+      url: 'https://storage.googleapis.com/mediapipe-models/llm_inference/gemma-2b-it-cpu-int4/float32/1/gemma-2b-it-cpu-int4.bin'
+    });
+    bar.style.width = '100%';
+    label.textContent = 'Download complete! Setting up…';
+    await loadData();
+    showScreen('home');
+  } catch (e) {
+    label.textContent = 'Download failed. Check your connection and try again.';
+    btn.disabled = false;
+    btn.textContent = 'Retry';
+    console.error(e);
+  }
+}

@@ -36,6 +36,30 @@
       </div>
     </div>
 
+    <!-- ===== MODEL SETUP ===== -->
+    <div id="modelSetup" class="screen">
+      <div class="splash-inner">
+        <div class="splash-logo">
+          <div class="logo-ring"></div>
+          <svg class="logo-icon" width="74" height="74" viewBox="0 0 168 168" fill="none">
+            <circle cx="84" cy="84" r="56" stroke="#4285F4" stroke-opacity="0.45" stroke-width="2"/>
+            <path d="M84 28C84 58.93 109.07 84 140 84C109.07 84 84 109.07 84 140C84 109.07 58.93 84 28 84C58.93 84 84 58.93 84 28Z" fill="#4285F4"/>
+          </svg>
+        </div>
+        <h1 class="splash-title">One-Time Setup</h1>
+        <p class="splash-sub">Downloading Gemma 2B (~1.5 GB)<br>Please stay on Wi-Fi. This only happens once.</p>
+        <div class="setup-progress" id="setupProgressArea" hidden>
+          <div class="progress-bar-track">
+            <div class="progress-bar-fill" id="modelProgressBar" style="width:0%"></div>
+          </div>
+          <p class="progress-label" id="modelProgressLabel">Starting…</p>
+        </div>
+        <button class="btn-primary btn-xl" id="startDownloadBtn"
+                onclick="startModelDownload()">Download Now</button>
+        <p class="splash-powered">Powered by Gemma 2B &middot; Runs offline after setup</p>
+      </div>
+    </div>
+
     <!-- ===== HOME ===== -->
     <div id="home" class="screen">
       <header class="header">
