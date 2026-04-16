@@ -296,13 +296,23 @@ body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:#eaf4ff;c
 .wiz-person-card {
   display: flex; align-items: center; gap: 12px;
   padding: 12px 16px; background: #fff; border-radius: 12px;
-  border: 1px solid #e8e8e8;
+  border: 1px solid #e8e8e8; cursor: pointer; transition: background 0.15s;
 }
+.wiz-person-card:active { background: #f0f0f5; }
 .wiz-person-card .wpc-info { flex: 1; }
 .wiz-person-card .wpc-name { font-weight: 600; color: #1a1a2e; }
 .wiz-person-card .wpc-rel { font-size: 0.8rem; color: #5f6368; }
 .wiz-person-card img {
   width: 48px; height: 48px; border-radius: 50%; object-fit: cover;
+}
+.wiz-person-card .wpc-avatar {
+  width: 48px; height: 48px; border-radius: 50%;
+  background: linear-gradient(135deg, #4c9bff, #86bfff);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 1.2rem; font-weight: 600; color: #fff; flex-shrink: 0;
+}
+.wiz-person-card .wpc-edit {
+  font-size: 0.8rem; color: #4285F4; font-weight: 500;
 }
 
 /* ===== REMINDERS ===== */

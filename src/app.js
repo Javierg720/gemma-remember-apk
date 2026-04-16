@@ -722,13 +722,16 @@ async function wizSavePerson() {
     const card = document.createElement('div');
     card.className = 'wiz-person-card';
     const imgSrc = wizPhotos[0] ? `data:image/jpeg;base64,${wizPhotos[0]}` : '';
+    const savedName = name, savedRel = rel, savedStory = story, savedPhotos = [...wizPhotos];
     card.innerHTML = `
-      ${imgSrc ? `<img src="${imgSrc}" alt="${name}">` : ''}
+      ${imgSrc ? `<img src="${imgSrc}" alt="${name}">` : '<div class="wpc-avatar">' + name.charAt(0).toUpperCase() + '</div>'}
       <div class="wpc-info">
         <div class="wpc-name">${name}</div>
         <div class="wpc-rel">${rel}</div>
       </div>
+      <span class="wpc-edit">Edit</span>
     `;
+    card.addEventListener('click', () => wizEditPerson(savedName, savedRel, savedStory, savedPhotos));
     list.appendChild(card);
 
     // Show "All done" button
@@ -741,6 +744,22 @@ async function wizSavePerson() {
   } finally {
     btn.disabled = false; btn.textContent = 'Save';
   }
+}
+
+function wizEditPerson(name, rel, story, photos) {
+  document.getElementById('personNameInput').value = name;
+  document.getElementById('personRelInput').value = rel;
+  document.getElementById('personStoryInput').value = story;
+  const row = document.getElementById('photoPreviewRow');
+  row.innerHTML = '';
+  wizPhotos = [...photos];
+  photos.forEach(b64 => {
+    const img = document.createElement('img');
+    img.src = `data:image/jpeg;base64,${b64}`;
+    row.appendChild(img);
+  });
+  document.getElementById('photoLabel').textContent = photos.length ? `${photos.length} photo(s)` : 'Choose photo(s)';
+  wizShowStep('wizStep2b');
 }
 
 async function wizardDone() {
