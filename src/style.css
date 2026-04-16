@@ -304,3 +304,46 @@ body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:#eaf4ff;c
 .wiz-person-card img {
   width: 48px; height: 48px; border-radius: 50%; object-fit: cover;
 }
+
+/* ===== REMINDERS ===== */
+.reminders-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 20px; }
+.reminder-card {
+  display: flex; align-items: center; gap: 12px;
+  padding: 14px 16px; background: #fff; border-radius: 12px;
+  border: 1px solid #e8e8e8;
+}
+.reminder-card .rc-icon {
+  width: 40px; height: 40px; border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 1.2rem;
+}
+.reminder-card .rc-icon.medication { background: #e8f5e9; }
+.reminder-card .rc-icon.appointment { background: #e3f2fd; }
+.reminder-card .rc-icon.birthday { background: #fce4ec; }
+.reminder-card .rc-icon.other { background: #f3e5f5; }
+.reminder-card .rc-info { flex: 1; }
+.reminder-card .rc-text { font-weight: 500; color: #1a1a2e; }
+.reminder-card .rc-meta { font-size: 0.8rem; color: #5f6368; }
+.reminder-card .rc-delete {
+  background: none; border: none; color: #999; cursor: pointer;
+  padding: 8px; font-size: 1.2rem;
+}
+.reminder-card .rc-delete:hover { color: #e53935; }
+.reminder-form { display: flex; flex-direction: column; gap: 10px; }
+.reminder-row { display: flex; gap: 8px; }
+
+/* ===== VOICE TOGGLE (BIG) ===== */
+.tts-toggle-big {
+  width: 52px; height: 52px; border-radius: 50%;
+  background: #e8f5e9; border: 2px solid #4caf50;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer; transition: all 0.2s; flex-shrink: 0;
+}
+.tts-toggle-big:hover { transform: scale(1.05); }
+.tts-toggle-big.muted {
+  background: #ffebee; border-color: #e53935;
+}
+.tts-toggle-big .tts-on { display: block; color: #4caf50; }
+.tts-toggle-big .tts-off { display: none; color: #e53935; }
+.tts-toggle-big.muted .tts-on { display: none; }
+.tts-toggle-big.muted .tts-off { display: block; }

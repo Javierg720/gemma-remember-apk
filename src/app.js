@@ -22,6 +22,12 @@ let currentAudio = null;
 
 function initTTS() {
   console.log('TTS initialized: Edge TTS Ava Multilingual');
+  const savedTTS = localStorage.getItem('ttsEnabled');
+  if (savedTTS === 'false') {
+    ttsEnabled = false;
+    const btn = document.getElementById('ttsToggle');
+    if (btn) btn.classList.add('muted');
+  }
 }
 
 async function speak(text) {
@@ -62,10 +68,11 @@ function stopSpeaking() {
 
 function toggleTTS() {
   ttsEnabled = !ttsEnabled;
+  localStorage.setItem('ttsEnabled', ttsEnabled ? 'true' : 'false');
   const btn = document.getElementById('ttsToggle');
   if (btn) {
     btn.classList.toggle('muted', !ttsEnabled);
-    btn.title = ttsEnabled ? 'Mute voice' : 'Unmute voice';
+    btn.title = ttsEnabled ? 'Voice on/off' : 'Voice on/off';
   }
   if (!ttsEnabled) stopSpeaking();
 }
@@ -101,7 +108,7 @@ function setPatientGreeting() {
 }
 
 // ===== NAVIGATION =====
-const TAB_SCREENS = ['home', 'family', 'identify', 'ask', 'about'];
+const TAB_SCREENS = ['home', 'family', 'identify', 'ask', 'about', 'reminders'];
 
 function showScreen(id) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
@@ -115,6 +122,8 @@ function showScreen(id) {
       t.classList.add('active');
     }
   });
+
+  if (id === 'reminders') loadReminders();
 }
 
 function setupSwipeNavigation() {
@@ -453,7 +462,8 @@ function sendMessage() {
               `Memory ${i+1}:\n  Name: ${m.name}\n  Relationship: ${m.relationship}\n  Story: ${m.story}\n  Caption: ${m.caption}`
             ).join('\n\n')
           : 'No matching family memories found.';
-        const prompt = `RETRIEVED MEMORIES:\n${context}\n\nUSER'S QUESTION: ${text}\n\nRespond warmly, grounding every fact in the retrieved memories above.`;
+        const remindersCtx = await getRemindersContext();
+        const prompt = `RETRIEVED MEMORIES:\n${context}${remindersCtx}\n\nUSER'S QUESTION: ${text}\n\nRespond warmly, grounding every fact in the retrieved memories above. If there are relevant reminders for today, mention them naturally.`;
         const { text: reply } = await GemmaPlugin.generate({
           systemPrompt: SYSTEM_PROMPT, query: prompt, maxTokens: 300
         });
@@ -716,6 +726,87 @@ async function wizSavePerson() {
 async function wizardDone() {
   await loadData();
   showScreen('home');
+}
+
+// ===== REMINDERS =====
+const CATEGORY_ICONS = { medication: '\u{1F48A}', appointment: '\u{1F4C5}', birthday: '\u{1F382}', other: '\u{1F4CC}' };
+
+async function loadReminders() {
+  if (!MemoryPlugin) return;
+  const { reminders } = await MemoryPlugin.getReminders();
+  const list = document.getElementById('remindersList');
+  if (!list) return;
+  list.innerHTML = '';
+  if (reminders.length === 0) {
+    list.innerHTML = '<p style="text-align:center;color:#999;padding:20px">No reminders yet. Add one below.</p>';
+    return;
+  }
+  reminders.forEach(r => {
+    const card = document.createElement('div');
+    card.className = 'reminder-card';
+    const cat = r.category || 'other';
+    const icon = CATEGORY_ICONS[cat] || CATEGORY_ICONS.other;
+    const meta = [r.recurring ? r.recurring : '', r.date || '', r.time || ''].filter(Boolean).join(' \u00B7 ');
+    card.innerHTML = `
+      <div class="rc-icon ${cat}">${icon}</div>
+      <div class="rc-info">
+        <div class="rc-text">${r.text}</div>
+        <div class="rc-meta">${meta || 'No schedule set'}</div>
+      </div>
+      <button class="rc-delete" onclick="deleteReminder('${r.id}')" title="Delete">\u00D7</button>
+    `;
+    list.appendChild(card);
+  });
+}
+
+async function addReminder() {
+  const text = document.getElementById('reminderText').value.trim();
+  if (!text) { document.getElementById('reminderText').focus(); return; }
+
+  const date = document.getElementById('reminderDate').value || null;
+  const time = document.getElementById('reminderTime').value || null;
+  const recurring = document.getElementById('reminderRecurring').value || null;
+  const category = document.getElementById('reminderCategory').value || 'other';
+
+  if (MemoryPlugin) {
+    await MemoryPlugin.addReminder({ text, date, time, recurring, category });
+  }
+
+  // Clear form
+  document.getElementById('reminderText').value = '';
+  document.getElementById('reminderDate').value = '';
+  document.getElementById('reminderTime').value = '';
+  document.getElementById('reminderRecurring').value = '';
+
+  await loadReminders();
+}
+
+async function deleteReminder(id) {
+  if (MemoryPlugin) {
+    await MemoryPlugin.deleteReminder({ id });
+  }
+  await loadReminders();
+}
+
+// Build reminders context for Gemma prompts
+async function getRemindersContext() {
+  if (!MemoryPlugin) return '';
+  try {
+    const { reminders } = await MemoryPlugin.getReminders();
+    if (!reminders || reminders.length === 0) return '';
+    const today = new Date().toISOString().split('T')[0];
+    const lines = reminders.map(r => {
+      let line = `- ${r.text}`;
+      if (r.category) line += ` (${r.category})`;
+      if (r.recurring) line += ` [${r.recurring}]`;
+      if (r.date) line += ` [${r.date}]`;
+      if (r.time) line += ` at ${r.time}`;
+      return line;
+    });
+    return `\n\nTODAY'S DATE: ${today}\nREMINDERS:\n${lines.join('\n')}`;
+  } catch (e) {
+    return '';
+  }
 }
 
 // ===== MODEL SETUP =====
