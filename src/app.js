@@ -81,6 +81,7 @@ async function loadData() {
   }
   renderFamily();
   setTimeOfDay();
+  setPatientGreeting();
 }
 
 function setTimeOfDay() {
@@ -89,6 +90,14 @@ function setTimeOfDay() {
   if (h < 12) el.textContent = 'morning';
   else if (h < 17) el.textContent = 'afternoon';
   else el.textContent = 'evening';
+}
+
+function setPatientGreeting() {
+  const name = localStorage.getItem('patientName');
+  if (name) {
+    const sub = document.querySelector('.greeting-sub');
+    if (sub) sub.textContent = `How can I help you remember, ${name}?`;
+  }
 }
 
 // ===== NAVIGATION =====
@@ -543,8 +552,122 @@ window.addEventListener('DOMContentLoaded', async () => {
       return;
     }
   }
-  await loadData();
+  if (!localStorage.getItem('patientName')) {
+    showScreen('setupWizard');
+  } else {
+    await loadData();
+  }
 });
+
+// ===== SETUP WIZARD =====
+let wizPhotos = []; // base64 strings from file picker
+
+function wizardNext1() {
+  const name = document.getElementById('patientNameInput').value.trim();
+  if (!name) { document.getElementById('patientNameInput').focus(); return; }
+  localStorage.setItem('patientName', name);
+  document.getElementById('wizPatientName').textContent = name;
+  // Update home greeting
+  const greetSub = document.querySelector('.greeting-sub');
+  if (greetSub) greetSub.textContent = `How can I help you remember, ${name}?`;
+  wizShowStep('wizStep2');
+}
+
+function wizShowStep(stepId) {
+  document.querySelectorAll('.wiz-step').forEach(s => s.classList.remove('active'));
+  document.getElementById(stepId).classList.add('active');
+}
+
+function wizShowAddPerson() {
+  // Reset form
+  document.getElementById('personNameInput').value = '';
+  document.getElementById('personRelInput').value = '';
+  document.getElementById('personStoryInput').value = '';
+  document.getElementById('personPhotoInput').value = '';
+  document.getElementById('photoPreviewRow').innerHTML = '';
+  document.getElementById('photoLabel').textContent = 'Choose photo(s)';
+  wizPhotos = [];
+  wizShowStep('wizStep2b');
+}
+
+function wizBackToPeople() {
+  wizShowStep('wizStep2');
+}
+
+// Photo picker handler
+document.addEventListener('DOMContentLoaded', () => {
+  const photoInput = document.getElementById('personPhotoInput');
+  if (photoInput) {
+    photoInput.addEventListener('change', function() {
+      const files = Array.from(this.files);
+      document.getElementById('photoLabel').textContent = `${files.length} photo(s) selected`;
+      const row = document.getElementById('photoPreviewRow');
+      row.innerHTML = '';
+      wizPhotos = [];
+      files.forEach(file => {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          wizPhotos.push(e.target.result.split(',')[1]); // base64
+          const img = document.createElement('img');
+          img.src = e.target.result;
+          row.appendChild(img);
+        };
+        reader.readAsDataURL(file);
+      });
+    });
+  }
+});
+
+async function wizSavePerson() {
+  const name = document.getElementById('personNameInput').value.trim();
+  const rel = document.getElementById('personRelInput').value;
+  const story = document.getElementById('personStoryInput').value.trim();
+
+  if (!name) { document.getElementById('personNameInput').focus(); return; }
+
+  const btn = document.querySelector('#wizStep2b .btn-primary');
+  btn.disabled = true; btn.textContent = 'Saving...';
+
+  try {
+    if (MemoryPlugin) {
+      // Save with first photo (if any)
+      await MemoryPlugin.addProfile({
+        name, relationship: rel, story,
+        photoBase64: wizPhotos[0] || '', caption: ''
+      });
+      // If multiple photos, add extra embeddings (future enhancement)
+    }
+
+    // Add to people list UI
+    const list = document.getElementById('wizPeopleList');
+    const card = document.createElement('div');
+    card.className = 'wiz-person-card';
+    const imgSrc = wizPhotos[0] ? `data:image/jpeg;base64,${wizPhotos[0]}` : '';
+    card.innerHTML = `
+      ${imgSrc ? `<img src="${imgSrc}" alt="${name}">` : ''}
+      <div class="wpc-info">
+        <div class="wpc-name">${name}</div>
+        <div class="wpc-rel">${rel}</div>
+      </div>
+    `;
+    list.appendChild(card);
+
+    // Show "All done" button
+    document.getElementById('wizDoneBtn').style.display = '';
+
+    wizBackToPeople();
+  } catch (e) {
+    console.error('Failed to save person:', e);
+    alert('Failed to save. Please try again.');
+  } finally {
+    btn.disabled = false; btn.textContent = 'Save';
+  }
+}
+
+async function wizardDone() {
+  await loadData();
+  showScreen('home');
+}
 
 // ===== MODEL SETUP =====
 async function startModelDownload() {
@@ -559,7 +682,14 @@ async function startModelDownload() {
 
   if (!GemmaPlugin) {
     label.textContent = 'Browser mode — no download needed.';
-    setTimeout(async () => { await loadData(); showScreen('home'); }, 1200);
+    setTimeout(async () => {
+      if (!localStorage.getItem('patientName')) {
+        showScreen('setupWizard');
+      } else {
+        await loadData();
+        showScreen('home');
+      }
+    }, 1200);
     return;
   }
 
@@ -577,8 +707,13 @@ async function startModelDownload() {
     });
     bar.style.width = '100%';
     label.textContent = 'Download complete! Setting up…';
-    await loadData();
-    showScreen('home');
+    // Check if wizard has been completed
+    if (!localStorage.getItem('patientName')) {
+      showScreen('setupWizard');
+    } else {
+      await loadData();
+      showScreen('home');
+    }
   } catch (e) {
     label.textContent = 'Download failed. Check your connection and try again.';
     btn.disabled = false;
