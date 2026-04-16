@@ -365,6 +365,8 @@ async function doIdentify() {
     document.getElementById('identifyResult').hidden = false;
     document.getElementById('identifyActions').hidden = true;
     speak(responseText);
+    // Auto-learn: if user uploaded a new photo of a known person, the embedding is already stored
+    // No additional extraction needed for photo identify — the match itself is the learning
   } catch (e) {
     document.getElementById('resultText').textContent =
       "I had trouble recognizing that photo. Please try again.";
@@ -429,8 +431,23 @@ function sendMessage() {
     typing.remove();
     try {
       let responseText;
+      let matches = [];
+      let found = false;
+
       if (GemmaPlugin && MemoryPlugin) {
-        const { matches, found } = await MemoryPlugin.findByText({ query: text });
+        const result = await MemoryPlugin.findByText({ query: text });
+        matches = result.matches || [];
+        found = result.found;
+
+        // Get profile IDs for auto-learning
+        if (found && matches.length > 0) {
+          const { profiles } = await MemoryPlugin.getAllProfiles();
+          matches.forEach(m => {
+            const profile = profiles.find(p => p.name === m.name);
+            if (profile) m.id = profile.id;
+          });
+        }
+
         const context = found
           ? matches.map((m, i) =>
               `Memory ${i+1}:\n  Name: ${m.name}\n  Relationship: ${m.relationship}\n  Story: ${m.story}\n  Caption: ${m.caption}`
@@ -446,6 +463,38 @@ function sendMessage() {
       }
       addMessage(responseText, 'bot', null);
       speak(responseText);
+
+      // === AUTO-LEARN: extract new facts from the conversation ===
+      if (GemmaPlugin && MemoryPlugin && found && matches.length > 0) {
+        try {
+          const topMatch = matches[0];
+          const extractPrompt = `You just had this conversation:
+USER: ${text}
+GEMMA: ${responseText}
+
+The user was talking about ${topMatch.name} (${topMatch.relationship}).
+Their current known story: "${topMatch.story}"
+
+Extract ONLY genuinely NEW facts mentioned in the USER's message that are NOT already in the known story.
+If there are new facts, respond with ONLY the new facts as a brief sentence to append.
+If there are NO new facts, respond with exactly: NO_NEW_FACTS`;
+
+          const { text: extracted } = await GemmaPlugin.generate({
+            systemPrompt: 'You are a fact extractor. Be precise. Only extract genuinely new information.',
+            query: extractPrompt, maxTokens: 100
+          });
+
+          if (extracted && !extracted.includes('NO_NEW_FACTS') && extracted.trim().length > 5) {
+            await MemoryPlugin.updateStory({
+              id: topMatch.id || '',
+              appendText: extracted.trim()
+            });
+            console.log('Auto-learned:', extracted.trim());
+          }
+        } catch (e) {
+          console.error('Auto-learn failed (non-blocking):', e);
+        }
+      }
     } catch (e) {
       addMessage("I'm having trouble remembering right now. Please try again.", 'bot', null);
       console.error(e);
