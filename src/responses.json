@@ -1,0 +1,180 @@
+{
+  "photo_queries": {
+    "sarah": {
+      "name": "Sarah",
+      "relationship": "Your daughter",
+      "color": "#FFB6C1",
+      "response": "Sarah is your youngest daughter. She loves baking chocolate chip cookies with you and calls every Sunday evening to check in.",
+      "captions": [
+        "Sarah at her nursing school graduation, 2018",
+        "Sarah baking cookies with you in the kitchen, 2019",
+        "Sarah and you at Lakeview Beach, 2020"
+      ],
+      "story": "Sarah is your youngest daughter. She became a nurse in 2018 and still keeps your Sunday phone call tradition."
+    },
+    "arki": {
+      "name": "Jack",
+      "relationship": "Your son",
+      "color": "#ADD8E6",
+      "response": "This is Jack, your eldest son. He built the backyard birdhouse for you years ago and now works as a carpenter.",
+      "captions": [
+        "Jack building the backyard birdhouse, 1998",
+        "Jack at his wedding, 2015",
+        "Jack holding baby Emma, 2020"
+      ],
+      "story": "Jack is your eldest son. He works as a carpenter and lives nearby with his wife, Lisa, and their daughter, Emma."
+    },
+    "maya": {
+      "name": "Emma",
+      "relationship": "Your granddaughter",
+      "color": "#FFFFC8",
+      "response": "Emma is your granddaughter. She loves drawing, gives you handmade cards, and calls you Nana.",
+      "captions": [
+        "Emma at her first birthday party, 2021",
+        "Emma drawing with you at the dining table, 2023",
+        "Emma at the neighborhood park, 2024"
+      ],
+      "story": "Emma is Jack and Lisa's daughter. She is cheerful, creative, and always excited to show you her latest drawings."
+    },
+    "robert": {
+      "name": "Robert",
+      "relationship": "Your husband",
+      "color": "#C8E6C8",
+      "response": "Robert is your husband. You married in 1975. He loved weekend fishing, tending roses, and listening to Moon River.",
+      "captions": [
+        "You and Robert on your wedding day, 1975",
+        "Robert fishing at Willow Lake, 1990",
+        "Robert in the rose garden, 2010"
+      ],
+      "story": "Robert is your husband and lifelong partner. He is calm, funny, and always made Sunday mornings feel special."
+    },
+    "margaret": {
+      "name": "Margaret",
+      "relationship": "Your quilting friend",
+      "color": "#E6C8E6",
+      "response": "Margaret is your longtime quilting friend. You meet at the community center and swap recipes after class.",
+      "captions": [
+        "You and Margaret at quilting circle, 2018",
+        "Margaret's birthday brunch, 2022"
+      ],
+      "story": "Margaret is one of your closest community friends and part of your weekly quilting group."
+    },
+    "buddy": {
+      "name": "Buddy",
+      "relationship": "Your pet dog",
+      "color": "#FFD78C",
+      "response": "Buddy is your golden retriever. He follows you around the house, loves belly rubs, and sleeps at the foot of your bed.",
+      "captions": [
+        "Buddy as a puppy on adoption day, 2019",
+        "Buddy playing fetch with Emma, 2023"
+      ],
+      "story": "Buddy joined the family in 2019. He is gentle, loyal, and your constant companion."
+    },
+    "dr_chen": {
+      "name": "Dr. Miller",
+      "relationship": "Your doctor",
+      "color": "#DCDCF0",
+      "response": "You see Dr. Miller every Tuesday at 2 PM at Riverside Family Clinic. She is kind and very patient with you.",
+      "captions": [
+        "Dr. Miller at Riverside Family Clinic"
+      ],
+      "story": "Dr. Miller has been your primary doctor for several years and helps keep your routine organized."
+    },
+    "lisa": {
+      "name": "Lisa",
+      "relationship": "Your daughter-in-law",
+      "color": "#FFDAB9",
+      "response": "Lisa is Jack's wife and your daughter-in-law. She teaches fourth grade and always brings lemon cake when she visits.",
+      "captions": [
+        "Lisa and Jack on their wedding day, 2015",
+        "Lisa helping Emma learn to ride a bike, 2023"
+      ],
+      "story": "Lisa is warm, organized, and thoughtful. She keeps the family gatherings running smoothly."
+    },
+    "uncle_joe": {
+      "name": "Uncle Joe",
+      "relationship": "Your brother-in-law",
+      "color": "#B4C8B4",
+      "response": "Uncle Joe is Robert's brother. He played jazz guitar for years and still wears his signature fedora.",
+      "captions": [
+        "Uncle Joe playing jazz downtown, 2005"
+      ],
+      "story": "Uncle Joe is the family's musician and storyteller, known for live jazz nights and funny road stories."
+    },
+    "best_friend_linda": {
+      "name": "Linda",
+      "relationship": "Your best friend",
+      "color": "#E7D6FF",
+      "response": "Linda is your best friend. You have known each other for decades and talk almost every day.",
+      "captions": [
+        "You and Linda at the county fair, 2017",
+        "Coffee morning with Linda, 2024"
+      ],
+      "story": "Linda has been your closest friend since your 20s. She drives you to appointments and never misses birthdays."
+    },
+    "neighbor_tom": {
+      "name": "Tom",
+      "relationship": "Your neighbor",
+      "color": "#D1E8FF",
+      "response": "Tom is your next-door neighbor. He helps with trash day, snow shoveling, and keeps an eye on your porch.",
+      "captions": [
+        "Tom fixing the mailbox post, 2022",
+        "Tom and Buddy in the front yard, 2024"
+      ],
+      "story": "Tom lives next door and is one of your most reliable daily helpers in the neighborhood."
+    },
+    "mailman_mike": {
+      "name": "Mike",
+      "relationship": "Your mailman",
+      "color": "#FFE3B3",
+      "response": "Mike is your mail carrier. He delivers your mail around noon and always checks that your packages are safely placed.",
+      "captions": [
+        "Mike delivering holiday cards, 2023",
+        "Mike dropping off a care package, 2024"
+      ],
+      "story": "Mike has been your mailman for years. He is friendly, dependable, and knows your routine."
+    }
+  },
+  "text_queries": {
+    "who bakes cookies with me?": {
+      "match": "sarah",
+      "response": "Sarah bakes cookies with you. It's one of your favorite traditions together."
+    },
+    "tell me about my dog": {
+      "match": "buddy",
+      "response": "Your dog is Buddy, a golden retriever. He is affectionate, loyal, and always by your side."
+    },
+    "when do i see the doctor?": {
+      "match": "dr_chen",
+      "response": "You see Dr. Miller every Tuesday afternoon at 2 PM at Riverside Family Clinic."
+    },
+    "who is my granddaughter?": {
+      "match": "maya",
+      "response": "Your granddaughter is Emma. She loves drawing and calls you Nana."
+    },
+    "who played jazz?": {
+      "match": "uncle_joe",
+      "response": "Uncle Joe played jazz guitar and is known in the family for music nights and stories."
+    },
+    "tell me about my husband": {
+      "match": "robert",
+      "response": "Your husband is Robert. You married in 1975, and he loved fishing, gardening, and old standards."
+    },
+    "who is my best friend?": {
+      "match": "best_friend_linda",
+      "response": "Your best friend is Linda. She has been by your side for decades and you talk almost every day."
+    },
+    "who is my neighbor?": {
+      "match": "neighbor_tom",
+      "response": "Your neighbor is Tom. He lives next door and helps with practical things like snow and trash day."
+    },
+    "who is my mailman?": {
+      "match": "mailman_mike",
+      "response": "Your mailman is Mike. He delivers around noon and makes sure packages are safe on your porch."
+    },
+    "who is my son?": {
+      "match": "arki",
+      "response": "Your son is Jack. He is a carpenter and built the backyard birdhouse for you."
+    }
+  }
+}

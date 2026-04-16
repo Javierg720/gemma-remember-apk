@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Gemma Remember</string>
+    <string name="title_activity_main">Gemma Remember</string>
+    <string name="package_name">com.gemmaremember.app</string>
+    <string name="custom_url_scheme">com.gemmaremember.app</string>
+</resources>
