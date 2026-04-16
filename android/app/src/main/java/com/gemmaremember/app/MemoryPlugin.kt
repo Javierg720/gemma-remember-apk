@@ -160,6 +160,47 @@ class MemoryPlugin : Plugin() {
         }
     }
 
+    @PluginMethod
+    fun updateStory(call: PluginCall) {
+        val id = call.getString("id") ?: return call.reject("id required")
+        val appendText = call.getString("appendText") ?: return call.reject("appendText required")
+        db.updateStory(id, appendText)
+        call.resolve()
+    }
+
+    @PluginMethod
+    fun addReminder(call: PluginCall) {
+        val text = call.getString("text") ?: return call.reject("text required")
+        val date = call.getString("date")
+        val time = call.getString("time")
+        val recurring = call.getString("recurring")
+        val category = call.getString("category")
+        val id = java.util.UUID.randomUUID().toString()
+        db.addReminder(id, text, date, time, recurring, category)
+        call.resolve(JSObject().apply { put("id", id) })
+    }
+
+    @PluginMethod
+    fun getReminders(call: PluginCall) {
+        val reminders = db.getReminders()
+        val arr = JSArray()
+        reminders.forEach { r ->
+            arr.put(JSObject().apply {
+                put("id", r["id"]); put("text", r["text"])
+                put("date", r["date"]); put("time", r["time"])
+                put("recurring", r["recurring"]); put("category", r["category"])
+            })
+        }
+        call.resolve(JSObject().apply { put("reminders", arr) })
+    }
+
+    @PluginMethod
+    fun deleteReminder(call: PluginCall) {
+        val id = call.getString("id") ?: return call.reject("id required")
+        db.deleteReminder(id)
+        call.resolve()
+    }
+
     private fun embedBase64(base64: String): FloatArray {
         val bytes = Base64.decode(base64, Base64.DEFAULT)
         val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
