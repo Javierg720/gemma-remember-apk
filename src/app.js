@@ -653,26 +653,46 @@ function wizBackToPeople() {
   wizShowStep('wizStep2');
 }
 
+// Resize image via canvas to prevent oversized base64
+function resizeImage(file, maxSize = 512) {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        let w = img.width, h = img.height;
+        if (w > h) { if (w > maxSize) { h = h * maxSize / w; w = maxSize; } }
+        else { if (h > maxSize) { w = w * maxSize / h; h = maxSize; } }
+        canvas.width = w; canvas.height = h;
+        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+        resolve(dataUrl);
+      };
+      img.onerror = () => resolve(e.target.result); // fallback to raw
+      img.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
 // Photo picker handler
 document.addEventListener('DOMContentLoaded', () => {
   const photoInput = document.getElementById('personPhotoInput');
   if (photoInput) {
-    photoInput.addEventListener('change', function() {
+    photoInput.addEventListener('change', async function() {
       const files = Array.from(this.files);
       document.getElementById('photoLabel').textContent = `${files.length} photo(s) selected`;
       const row = document.getElementById('photoPreviewRow');
       row.innerHTML = '';
       wizPhotos = [];
-      files.forEach(file => {
-        const reader = new FileReader();
-        reader.onload = (e) => {
-          wizPhotos.push(e.target.result.split(',')[1]); // base64
-          const img = document.createElement('img');
-          img.src = e.target.result;
-          row.appendChild(img);
-        };
-        reader.readAsDataURL(file);
-      });
+      for (const file of files) {
+        const dataUrl = await resizeImage(file, 512);
+        wizPhotos.push(dataUrl.split(',')[1]); // base64 without prefix
+        const img = document.createElement('img');
+        img.src = dataUrl;
+        row.appendChild(img);
+      }
     });
   }
 });
