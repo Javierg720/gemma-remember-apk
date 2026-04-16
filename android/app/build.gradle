@@ -51,8 +51,13 @@ dependencies {
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
     implementation project(':capacitor-cordova-android-plugins')
 
-    // MediaPipe Tasks
-    implementation "com.google.mediapipe:tasks-genai:0.10.21"
+    // Kotlin stdlib
+    implementation "org.jetbrains.kotlin:kotlin-stdlib:2.2.21"
+
+    // LiteRT-LM for Gemma 4 on-device inference
+    implementation "com.google.ai.edge.litertlm:litertlm-android:0.10.0"
+
+    // MediaPipe Tasks (image embedding)
     implementation "com.google.mediapipe:tasks-vision:0.10.21"
 }
 

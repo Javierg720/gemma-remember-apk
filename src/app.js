@@ -573,7 +573,7 @@ async function startModelDownload() {
 
   try {
     await GemmaPlugin.downloadModel({
-      url: 'https://storage.googleapis.com/mediapipe-models/llm_inference/gemma-2b-it-cpu-int4/float32/1/gemma-2b-it-cpu-int4.bin'
+      url: 'https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm'
     });
     bar.style.width = '100%';
     label.textContent = 'Download complete! Setting up…';

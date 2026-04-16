@@ -6,8 +6,9 @@ import com.getcapacitor.Plugin
 import com.getcapacitor.PluginCall
 import com.getcapacitor.PluginMethod
 import com.getcapacitor.annotation.CapacitorPlugin
-import com.google.mediapipe.tasks.genai.llminference.LlmInference
-import com.google.mediapipe.tasks.genai.llminference.LlmInference.LlmInferenceOptions
+import com.google.ai.edge.litertlm.Engine
+import com.google.ai.edge.litertlm.EngineConfig
+import com.google.ai.edge.litertlm.Conversation
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -18,13 +19,13 @@ import java.net.URL
 @CapacitorPlugin(name = "GemmaPlugin")
 class GemmaPlugin : Plugin() {
 
-    private var llm: LlmInference? = null
+    private var engine: Engine? = null
 
     companion object {
-        const val MODEL_FILENAME = "gemma2b.task"
+        const val MODEL_FILENAME = "gemma4-e2b.litertlm"
         const val MODEL_URL =
-            "https://storage.googleapis.com/mediapipe-models/llm_inference/" +
-            "gemma-2b-it-cpu-int4/float32/1/gemma-2b-it-cpu-int4.bin"
+            "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/" +
+            "resolve/main/gemma-4-E2B-it.litertlm"
 
         fun isModelReady(context: Context): Boolean =
             File(context.filesDir, MODEL_FILENAME).exists()
@@ -47,10 +48,11 @@ class GemmaPlugin : Plugin() {
             try {
                 val dest = File(context.filesDir, MODEL_FILENAME)
                 val conn = URL(url).openConnection()
+                conn.setRequestProperty("User-Agent", "GemmaRemember/1.0")
                 val total = conn.contentLengthLong
                 conn.getInputStream().use { input ->
                     FileOutputStream(dest).use { output ->
-                        val buf = ByteArray(8192)
+                        val buf = ByteArray(65536)
                         var downloaded = 0L
                         var n: Int
                         while (input.read(buf).also { n = it } >= 0) {
@@ -69,6 +71,8 @@ class GemmaPlugin : Plugin() {
                 result.put("success", true)
                 call.resolve(result)
             } catch (e: Exception) {
+                // Clean up partial download
+                File(context.filesDir, MODEL_FILENAME).delete()
                 call.reject("Download failed: ${e.message}")
             }
         }
@@ -79,7 +83,6 @@ class GemmaPlugin : Plugin() {
         val systemPrompt = call.getString("systemPrompt") ?: ""
         val query = call.getString("query")
             ?: return call.reject("query required")
-        val maxTokens = call.getInt("maxTokens") ?: 512
 
         if (!isModelReady(context)) {
             call.reject("Model not ready. Download first.")
@@ -88,20 +91,21 @@ class GemmaPlugin : Plugin() {
 
         CoroutineScope(Dispatchers.Default).launch {
             try {
-                val lm = llm ?: run {
-                    val opts = LlmInferenceOptions.builder()
-                        .setModelPath(modelPath(context))
-                        .setMaxTokens(maxTokens)
-                        .setMaxTopK(40)
-                        .build()
-                    LlmInference.createFromOptions(context, opts).also { llm = it }
+                val eng = engine ?: run {
+                    val config = EngineConfig(modelPath = modelPath(context))
+                    Engine(config).also {
+                        it.initialize()
+                        engine = it
+                    }
                 }
-                val fullPrompt = if (systemPrompt.isNotBlank())
-                    "$systemPrompt\n\n$query" else query
-                val response = lm.generateResponse(fullPrompt)
-                val result = JSObject()
-                result.put("text", response)
-                call.resolve(result)
+                eng.createConversation().use { conversation ->
+                    val fullPrompt = if (systemPrompt.isNotBlank())
+                        "$systemPrompt\n\n$query" else query
+                    val response = conversation.sendMessage(fullPrompt)
+                    val result = JSObject()
+                    result.put("text", response)
+                    call.resolve(result)
+                }
             } catch (e: Exception) {
                 call.reject("Generation failed: ${e.message}")
             }
