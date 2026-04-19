@@ -233,7 +233,10 @@ function getInitials(name) {
 }
 
 function getAvatarGradient(color) {
-  // Darken the color slightly for better contrast with white text
+  if (!color || color.length < 7) {
+    // Generate a consistent color from name hash
+    return 'linear-gradient(135deg, #4a90d9, #357abd)';
+  }
   const r = parseInt(color.slice(1,3),16);
   const g = parseInt(color.slice(3,5),16);
   const b = parseInt(color.slice(5,7),16);
@@ -248,9 +251,11 @@ function avatarImagePath(key) {
 function buildAvatarMarkup(key, person) {
   const initials = getInitials(person.name);
   const bg = getAvatarGradient(person.color);
-  const img = avatarImagePath(key);
+  const imgSrc = person.photoBase64
+    ? `data:image/jpeg;base64,${person.photoBase64}`
+    : avatarImagePath(key);
   return `<div class="avatar" style="background:${bg}">
-    <img src="${img}" alt="${person.name}" loading="lazy" onload="this.nextElementSibling.style.display='none'" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex'">
+    <img src="${imgSrc}" alt="${person.name}" loading="lazy" onload="this.nextElementSibling.style.display='none'" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex'">
     <span class="avatar-fallback">${initials}</span>
   </div>`;
 }
@@ -304,14 +309,18 @@ function showPerson(key) {
   const avatar = document.getElementById('personAvatar');
   const initials = getInitials(p.name);
   avatar.style.background = getAvatarGradient(p.color);
+  const imgSrc = p.photoBase64
+    ? `data:image/jpeg;base64,${p.photoBase64}`
+    : avatarImagePath(key);
   avatar.innerHTML = `
-    <img src="${avatarImagePath(key)}" alt="${p.name}" onload="this.nextElementSibling.style.display='none'" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex'">
+    <img src="${imgSrc}" alt="${p.name}" onload="this.nextElementSibling.style.display='none'" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex'">
     <span class="avatar-fallback">${initials}</span>
   `;
 
   const list = document.getElementById('personMemories');
   list.innerHTML = '';
-  for (const cap of p.captions) {
+  const captions = p.captions || (p.caption ? [p.caption] : []);
+  for (const cap of captions) {
     const li = document.createElement('li');
     li.textContent = cap;
     list.appendChild(li);
@@ -623,10 +632,24 @@ window.addEventListener('DOMContentLoaded', async () => {
   initTTS();
   initSTT();
   if (GemmaPlugin) {
-    const { ready } = await GemmaPlugin.isModelReady();
-    if (!ready) {
-      showScreen('modelSetup');
-      return;
+    try {
+      const { ready, engineAvailable, device } = await GemmaPlugin.isModelReady();
+      if (!engineAvailable) {
+        document.body.innerHTML = `
+          <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;padding:2rem;text-align:center;font-family:sans-serif;background:#1a1a2e;color:#fff;">
+            <h1 style="font-size:2rem;margin-bottom:1rem;">⚠️ Device Not Supported</h1>
+            <p style="font-size:1.1rem;color:#ccc;max-width:400px;">Gemma Remember requires a physical Android device with an ARM processor for on-device AI.</p>
+            <p style="font-size:0.9rem;color:#888;margin-top:1rem;">Detected: ${device || 'Unknown'}</p>
+            <p style="font-size:0.9rem;color:#888;margin-top:0.5rem;">Emulators and x86 devices are not supported.</p>
+          </div>`;
+        return;
+      }
+      if (!ready) {
+        showScreen('modelSetup');
+        return;
+      }
+    } catch (e) {
+      console.error('GemmaPlugin check failed:', e);
     }
   }
   if (!localStorage.getItem('patientName')) {
@@ -833,7 +856,11 @@ function wizEditPerson(name, rel, story, photos) {
 }
 
 async function wizardDone() {
-  await loadData();
+  try {
+    await loadData();
+  } catch (e) {
+    console.error('loadData failed in wizardDone:', e);
+  }
   showScreen('home');
 }
 

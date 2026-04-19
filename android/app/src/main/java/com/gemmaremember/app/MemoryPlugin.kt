@@ -39,23 +39,39 @@ class MemoryPlugin : Plugin() {
 
     override fun load() {
         db = MemoryDB(context)
-        val opts = ImageEmbedderOptions.builder()
-            .setBaseOptions(BaseOptions.builder()
-                .setModelAssetPath("mobilenet_v3_small_075_224_embedder.tflite")
-                .build())
-            .setQuantize(false)
-            .build()
-        imageEmbedder = ImageEmbedder.createFromOptions(context, opts)
+        try {
+            val opts = ImageEmbedderOptions.builder()
+                .setBaseOptions(BaseOptions.builder()
+                    .setModelAssetPath("mobilenet_v3_small_075_224_embedder.tflite")
+                    .build())
+                .setQuantize(false)
+                .build()
+            imageEmbedder = ImageEmbedder.createFromOptions(context, opts)
+        } catch (e: Throwable) {
+            android.util.Log.w("MemoryPlugin", "ImageEmbedder unavailable: ${e.message}")
+            imageEmbedder = null
+        }
     }
 
     @PluginMethod
     fun getAllProfiles(call: PluginCall) {
         val arr = JSArray()
         db.getAllProfiles().forEach { p ->
+            val photoPath = p["photo_path"] ?: ""
+            var photoBase64 = ""
+            if (photoPath.isNotBlank()) {
+                try {
+                    val file = java.io.File(photoPath)
+                    if (file.exists()) {
+                        photoBase64 = Base64.encodeToString(file.readBytes(), Base64.NO_WRAP)
+                    }
+                } catch (_: Exception) {}
+            }
             arr.put(JSObject().apply {
                 put("id", p["id"]); put("name", p["name"])
                 put("relationship", p["relationship"]); put("story", p["story"])
                 put("photo_path", p["photo_path"]); put("caption", p["caption"])
+                put("photoBase64", photoBase64)
             })
         }
         call.resolve(JSObject().apply { put("profiles", arr) })
@@ -72,8 +88,16 @@ class MemoryPlugin : Plugin() {
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val id = UUID.randomUUID().toString()
-                db.addProfile(id, name, relationship, story, "", caption)
+                var photoPath = ""
                 if (photoBase64.isNotBlank()) {
+                    val bytes = Base64.decode(photoBase64, Base64.DEFAULT)
+                    val photoFile = java.io.File(context.filesDir, "photos/${id}.jpg")
+                    photoFile.parentFile?.mkdirs()
+                    photoFile.writeBytes(bytes)
+                    photoPath = photoFile.absolutePath
+                }
+                db.addProfile(id, name, relationship, story, photoPath, caption)
+                if (photoBase64.isNotBlank() && imageEmbedder != null) {
                     val embedding = embedBase64(photoBase64)
                     db.storeEmbedding(UUID.randomUUID().toString(), id, "image", embedding)
                 }
@@ -95,6 +119,11 @@ class MemoryPlugin : Plugin() {
     fun findByImage(call: PluginCall) {
         val imageBase64 = call.getString("imageBase64")
             ?: return call.reject("imageBase64 required")
+
+        if (imageEmbedder == null) {
+            call.resolve(JSObject().apply { put("found", false); put("confidence", 0.0) })
+            return
+        }
 
         CoroutineScope(Dispatchers.Default).launch {
             try {
