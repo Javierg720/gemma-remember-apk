@@ -1,0 +1,1130 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Voice Visualizer</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+<style>
+  :root {
+    --bg: #050814;
+    --bg-2: #0a0f24;
+    --ink: #e8eeff;
+    --ink-dim: #8493b8;
+    --ink-faint: #4a5578;
+    --line: rgba(255,255,255,0.06);
+    --line-strong: rgba(255,255,255,0.12);
+    --accent: oklch(0.85 0.12 240);
+    --accent-violet: oklch(0.72 0.16 290);
+    --accent-mint: oklch(0.88 0.12 180);
+    --accent-warm: oklch(0.84 0.12 60);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; background: var(--bg); color: var(--ink); font-family: "Inter Tight", system-ui, sans-serif; overflow: hidden; }
+  body {
+    background:
+      radial-gradient(ellipse 80% 60% at 50% 40%, rgba(40, 70, 160, 0.18), transparent 60%),
+      radial-gradient(ellipse 60% 40% at 50% 80%, rgba(120, 60, 200, 0.08), transparent 60%),
+      var(--bg);
+  }
+  .app { position: fixed; inset: 0; display: grid; grid-template-rows: auto 1fr auto; }
+
+  /* ---- top bar ---- */
+  .topbar { padding: 28px 32px; display: flex; align-items: center; justify-content: space-between; gap: 16px; z-index: 20; }
+  .brand { display: flex; align-items: center; gap: 12px; font-family: "JetBrains Mono", monospace; font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--ink-dim); }
+  .brand-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 12px var(--accent); }
+  .state-chip {
+    display: inline-flex; align-items: center; gap: 10px;
+    padding: 8px 14px 8px 12px;
+    border: 1px solid var(--line-strong);
+    background: rgba(255,255,255,0.03);
+    border-radius: 999px;
+    backdrop-filter: blur(12px);
+    font-size: 12px; letter-spacing: 0.04em;
+    font-family: "JetBrains Mono", monospace;
+    text-transform: uppercase;
+    color: var(--ink);
+    transition: all 0.4s ease;
+  }
+  .state-chip .ind { width: 8px; height: 8px; border-radius: 50%; background: var(--ink-faint); transition: all 0.4s ease; }
+  .state-chip[data-state="listening"] .ind { background: var(--accent); box-shadow: 0 0 10px var(--accent); animation: pulse 1.4s infinite; }
+  .state-chip[data-state="thinking"] .ind { background: var(--accent-violet); box-shadow: 0 0 10px var(--accent-violet); }
+  .state-chip[data-state="speaking"] .ind { background: var(--accent-mint); box-shadow: 0 0 10px var(--accent-mint); animation: pulse 0.7s infinite; }
+  @keyframes pulse { 0%,100% { opacity:1; transform: scale(1); } 50% { opacity:.55; transform: scale(0.85);} }
+
+  .style-tabs { display: flex; gap: 4px; padding: 4px; border: 1px solid var(--line-strong); background: rgba(255,255,255,0.02); border-radius: 999px; backdrop-filter: blur(12px); }
+  .style-tabs button {
+    appearance: none; background: transparent; border: 0; color: var(--ink-dim);
+    font-family: "JetBrains Mono", monospace; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase;
+    padding: 7px 14px; border-radius: 999px; cursor: pointer; transition: all 0.25s;
+  }
+  .style-tabs button:hover { color: var(--ink); }
+  .style-tabs button.active { background: rgba(255,255,255,0.08); color: var(--ink); }
+
+  /* ---- stage ---- */
+  .stage { position: relative; overflow: hidden; }
+  .stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+
+  .center-label {
+    position: absolute; left: 50%; bottom: 12%; transform: translateX(-50%);
+    text-align: center; pointer-events: none;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10px; letter-spacing: 0.3em; text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+  .center-label .line { margin-top: 6px; width: 24px; height: 1px; background: var(--line-strong); margin-left: auto; margin-right: auto; }
+
+  /* crosshair plate (ambient detail) */
+  .plate { position: absolute; inset: 0; pointer-events: none; opacity: 0.35; }
+  .plate .tick { position: absolute; font-family: "JetBrains Mono", monospace; font-size: 9px; letter-spacing: 0.15em; color: var(--ink-faint); }
+
+  /* ---- bottom bar ---- */
+  .bottombar {
+    padding: 24px 32px 32px;
+    display: grid; grid-template-columns: 1fr auto 1fr; gap: 24px; align-items: center;
+    z-index: 20;
+  }
+  .transcript {
+    min-height: 56px;
+    padding: 14px 18px;
+    border: 1px solid var(--line);
+    background: rgba(255,255,255,0.02);
+    border-radius: 14px;
+    backdrop-filter: blur(8px);
+    display: flex; flex-direction: column; gap: 2px;
+    max-width: 520px;
+    justify-self: end;
+  }
+  .transcript .who { font-family: "JetBrains Mono", monospace; font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--ink-faint); }
+  .transcript .text { font-size: 15px; line-height: 1.45; color: var(--ink); min-height: 22px; }
+  .transcript .caret::after { content: "▍"; margin-left: 2px; color: var(--accent); animation: blink 1s steps(2) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  .mic-wrap { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+  .mic-btn {
+    width: 72px; height: 72px; border-radius: 50%;
+    border: 1px solid var(--line-strong);
+    background: radial-gradient(circle at 50% 40%, rgba(120, 170, 255, 0.18), rgba(255,255,255,0.02) 70%);
+    color: var(--ink); cursor: pointer;
+    display: grid; place-items: center;
+    transition: all 0.3s;
+    position: relative;
+  }
+  .mic-btn::before {
+    content: ""; position: absolute; inset: -6px; border-radius: 50%;
+    border: 1px solid var(--accent); opacity: 0; transition: all 0.4s;
+  }
+  .mic-btn:hover { transform: translateY(-1px); border-color: rgba(255,255,255,0.22); }
+  .mic-btn.live::before { opacity: 0.6; animation: ring 1.6s ease-out infinite; }
+  @keyframes ring { 0% { transform: scale(0.95); opacity: 0.8; } 100% { transform: scale(1.3); opacity: 0; } }
+  .mic-btn svg { width: 24px; height: 24px; }
+  .mic-meta { font-family: "JetBrains Mono", monospace; font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--ink-faint); }
+
+  .suggest { display: flex; flex-direction: column; gap: 6px; justify-self: start; max-width: 320px; }
+  .suggest .label { font-family: "JetBrains Mono", monospace; font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--ink-faint); }
+  .suggest .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip {
+    appearance: none; border: 1px solid var(--line-strong);
+    background: rgba(255,255,255,0.02); color: var(--ink);
+    padding: 7px 12px; border-radius: 999px;
+    font-size: 12px; cursor: pointer; transition: all 0.2s;
+    font-family: inherit;
+  }
+  .chip:hover { background: rgba(255,255,255,0.08); border-color: rgba(255,255,255,0.2); }
+
+  /* ---- tweaks ---- */
+  .tweaks {
+    position: fixed; right: 24px; bottom: 130px;
+    width: 260px;
+    border: 1px solid var(--line-strong);
+    background: rgba(10, 14, 28, 0.82);
+    backdrop-filter: blur(16px);
+    border-radius: 14px; padding: 14px; z-index: 50;
+    display: none;
+  }
+  .tweaks.show { display: block; }
+  .tweaks h3 { margin: 0 0 10px; font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; font-family: "JetBrains Mono", monospace; color: var(--ink-dim); font-weight: 500; }
+  .tweaks .row { margin-bottom: 10px; }
+  .tweaks .row > label { display: block; font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-faint); margin-bottom: 6px; font-family: "JetBrains Mono", monospace; }
+  .tweaks .seg { display: flex; gap: 2px; padding: 2px; border: 1px solid var(--line-strong); border-radius: 8px; background: rgba(255,255,255,0.02); }
+  .tweaks .seg button { flex: 1; appearance: none; background: transparent; border: 0; color: var(--ink-dim); padding: 6px 4px; border-radius: 6px; font-size: 11px; cursor: pointer; font-family: inherit; transition: all 0.2s; }
+  .tweaks .seg button.active { background: rgba(255,255,255,0.08); color: var(--ink); }
+  .tweaks input[type=range] { width: 100%; accent-color: var(--accent); }
+
+  /* palettes */
+  body.palette-violet { --accent: oklch(0.78 0.18 300); --accent-violet: oklch(0.7 0.2 280); --accent-mint: oklch(0.85 0.14 330); }
+  body.palette-mint { --accent: oklch(0.85 0.14 175); --accent-violet: oklch(0.78 0.14 200); --accent-mint: oklch(0.9 0.14 150); }
+  body.palette-warm { --accent: oklch(0.85 0.14 70); --accent-violet: oklch(0.78 0.15 40); --accent-mint: oklch(0.9 0.14 95); }
+  body.palette-care {
+    --bg: #0b1a1d;
+    --accent: oklch(0.82 0.10 200);      /* soft blue */
+    --accent-violet: oklch(0.82 0.10 170); /* blue-green */
+    --accent-mint: oklch(0.90 0.10 95);    /* soft warm yellow */
+  }
+  body.palette-care {
+    background:
+      radial-gradient(ellipse 80% 60% at 50% 45%, rgba(60, 140, 150, 0.22), transparent 60%),
+      radial-gradient(ellipse 70% 50% at 50% 85%, rgba(200, 180, 110, 0.06), transparent 60%),
+      #0b1a1d;
+  }
+
+  .foot { position: fixed; bottom: 8px; left: 0; right: 0; text-align: center; font-family: "JetBrains Mono", monospace; font-size: 9px; letter-spacing: 0.3em; color: var(--ink-faint); opacity: 0.6; pointer-events: none; z-index: 1; }
+  /* Hide chrome when embedded in iframe */
+  @media (max-height: 600px), (max-width: 500px) {
+    .topbar, .bottombar, .foot, .plate, .center-label, .tweaks { display: none !important; }
+    .app { grid-template-rows: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-dot"></span>
+      <span>HALO &nbsp;/&nbsp; voice interface</span>
+    </div>
+    <div class="style-tabs" id="styleTabs">
+      <button data-style="bloom" class="active">Bloom</button>
+      <button data-style="bars">Spectra</button>
+      <button data-style="orbit">Orbit</button>
+      <button data-style="ribbon">Ribbon</button>
+      <button data-style="nova">Nova</button>
+      <button data-style="calm">Companion</button>
+    </div>
+    <div class="state-chip" id="stateChip" data-state="idle">
+      <span class="ind"></span>
+      <span id="stateLabel">Idle</span>
+    </div>
+  </header>
+
+  <main class="stage" id="stage">
+    <canvas id="c"></canvas>
+    <div class="plate">
+      <div class="tick" style="top:20px;left:32px;">00 · N</div>
+      <div class="tick" style="top:20px;right:32px;">FREQ · 48k</div>
+      <div class="tick" style="bottom:12px;left:32px;">CH · L/R</div>
+      <div class="tick" style="bottom:12px;right:32px;">v1.04</div>
+    </div>
+    <div class="center-label" id="centerLabel">
+      <div>Tap to begin</div>
+      <div class="line"></div>
+    </div>
+  </main>
+
+  <footer class="bottombar">
+    <div class="transcript" id="transcript">
+      <div class="who" id="who">Halo</div>
+      <div class="text" id="text">Ask me anything — I'm listening.</div>
+    </div>
+
+    <div class="mic-wrap">
+      <button class="mic-btn" id="micBtn" aria-label="Toggle mic">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="9" y="3" width="6" height="12" rx="3"/>
+          <path d="M5 11a7 7 0 0 0 14 0"/>
+          <path d="M12 18v3"/>
+        </svg>
+      </button>
+      <div class="mic-meta" id="micMeta">Press to talk</div>
+    </div>
+
+    <div class="suggest">
+      <div class="label">Try</div>
+      <div class="chips">
+        <button class="chip" data-prompt="What's on my calendar today?">What's on my calendar?</button>
+        <button class="chip" data-prompt="Summarize my unread messages">Summarize messages</button>
+        <button class="chip" data-prompt="Play something calm">Play something calm</button>
+      </div>
+    </div>
+  </footer>
+</div>
+
+<div class="tweaks" id="tweaks">
+  <h3>Tweaks</h3>
+  <div class="row">
+    <label>Style</label>
+    <div class="seg" id="tweakStyle">
+      <button data-style="bloom" class="active">Bloom</button>
+      <button data-style="bars">Spectra</button>
+      <button data-style="orbit">Orbit</button>
+      <button data-style="ribbon">Ribbon</button>
+      <button data-style="nova">Nova</button>
+      <button data-style="calm">Companion</button>
+    </div>
+  </div>
+  <div class="row">
+    <label>Palette</label>
+    <div class="seg" id="tweakPalette">
+      <button data-pal="default" class="active">Cyan</button>
+      <button data-pal="violet">Violet</button>
+      <button data-pal="mint">Mint</button>
+      <button data-pal="warm">Ember</button>
+      <button data-pal="care">Care</button>
+    </div>
+  </div>
+  <div class="row">
+    <label>Force state</label>
+    <div class="seg" id="tweakState">
+      <button data-st="auto" class="active">Auto</button>
+      <button data-st="idle">Idle</button>
+      <button data-st="listening">Listen</button>
+      <button data-st="thinking">Think</button>
+      <button data-st="speaking">Speak</button>
+    </div>
+  </div>
+  <div class="row">
+    <label>Source</label>
+    <div class="seg" id="tweakSource">
+      <button data-src="sim" class="active">Simulated</button>
+      <button data-src="mic">Microphone</button>
+    </div>
+  </div>
+  <div class="row">
+    <label>Intensity · <span id="intVal">100</span>%</label>
+    <input type="range" id="intRange" min="80" max="180" value="100"/>
+  </div>
+</div>
+
+<div class="foot">HALO · VOICE INTERFACE · ORIGINAL DESIGN</div>
+
+<script>
+/* ============================================================
+   DEFAULT TWEAK STATE (edit-mode persistence block)
+============================================================ */
+const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "style": "calm",
+  "palette": "care",
+  "forceState": "auto",
+  "source": "sim",
+  "intensity": 150
+}/*EDITMODE-END*/;
+
+/* ============================================================
+   CORE STATE
+============================================================ */
+const S = {
+  style: TWEAK_DEFAULTS.style,
+  palette: TWEAK_DEFAULTS.palette,
+  forceState: TWEAK_DEFAULTS.forceState,
+  source: TWEAK_DEFAULTS.source,
+  intensity: TWEAK_DEFAULTS.intensity,
+  state: "idle",         // idle | listening | thinking | speaking
+  level: 0,              // smoothed amplitude 0..1
+  activity: 0,           // smoothed activity 0..1
+  t: 0,                  // seconds
+  spectrum: new Float32Array(64),  // simulated / derived spectrum
+  micStream: null,
+  analyser: null,
+  dataArr: null,
+};
+
+function applyPalette(p) {
+  document.body.classList.remove("palette-violet","palette-mint","palette-warm");
+  if (p === "violet") document.body.classList.add("palette-violet");
+  else if (p === "mint") document.body.classList.add("palette-mint");
+  else if (p === "warm") document.body.classList.add("palette-warm");
+  else if (p === "care") document.body.classList.add("palette-care");
+}
+applyPalette(S.palette);
+
+function getAccent() {
+  const v = getComputedStyle(document.body).getPropertyValue("--accent").trim();
+  const v2 = getComputedStyle(document.body).getPropertyValue("--accent-violet").trim();
+  const v3 = getComputedStyle(document.body).getPropertyValue("--accent-mint").trim();
+  return { a: v, b: v2, c: v3 };
+}
+
+/* ============================================================
+   STATE MACHINE (simulated conversation)
+============================================================ */
+const CONVO = [
+  { who: "You", text: "What's the weather looking like for this weekend?", state: "listening", dur: 2600 },
+  { who: "Halo", text: "Thinking…", state: "thinking", dur: 1400 },
+  { who: "Halo", text: "Saturday looks clear — 68° and sunny. Sunday brings light showers in the afternoon.", state: "speaking", dur: 4600 },
+  { who: "Halo", text: "Ask me anything — I'm listening.", state: "idle", dur: 3000 },
+  { who: "You", text: "Remind me to water the plants on Friday morning.", state: "listening", dur: 2800 },
+  { who: "Halo", text: "Working on it…", state: "thinking", dur: 1300 },
+  { who: "Halo", text: "Done. Reminder set for Friday at 8:00 AM.", state: "speaking", dur: 3400 },
+  { who: "Halo", text: "Ask me anything — I'm listening.", state: "idle", dur: 2800 },
+];
+let convoIdx = 0;
+let convoTimer = null;
+let typingTimer = null;
+
+const whoEl = document.getElementById("who");
+const textEl = document.getElementById("text");
+
+function setTranscript(who, text, typing=false) {
+  whoEl.textContent = who;
+  textEl.classList.remove("caret");
+  if (typing) {
+    textEl.textContent = "";
+    textEl.classList.add("caret");
+    clearInterval(typingTimer);
+    let i = 0;
+    typingTimer = setInterval(() => {
+      textEl.textContent = text.slice(0, ++i);
+      if (i >= text.length) { clearInterval(typingTimer); textEl.classList.remove("caret"); }
+    }, 26);
+  } else {
+    textEl.textContent = text;
+  }
+}
+
+function setState(next) {
+  S.state = next;
+  const chip = document.getElementById("stateChip");
+  const lbl = document.getElementById("stateLabel");
+  chip.dataset.state = next;
+  lbl.textContent = ({idle:"Idle", listening:"Listening", thinking:"Thinking", speaking:"Speaking"})[next];
+  document.getElementById("centerLabel").style.opacity = next === "idle" ? 0.7 : 0;
+}
+
+function playConvo() {
+  clearTimeout(convoTimer);
+  const step = CONVO[convoIdx % CONVO.length];
+  setState(step.state);
+  if (step.state === "speaking") setTranscript(step.who, step.text, true);
+  else if (step.state === "thinking") setTranscript(step.who, step.text);
+  else setTranscript(step.who, step.text);
+  convoTimer = setTimeout(() => { convoIdx++; playConvo(); }, step.dur);
+}
+
+function stopConvo() {
+  clearTimeout(convoTimer);
+  clearInterval(typingTimer);
+}
+
+/* ============================================================
+   AUDIO SOURCES
+============================================================ */
+async function startMic() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const src = ctx.createMediaStreamSource(stream);
+    const an = ctx.createAnalyser(); an.fftSize = 256; an.smoothingTimeConstant = 0.78;
+    src.connect(an);
+    S.micStream = stream; S.analyser = an; S.dataArr = new Uint8Array(an.frequencyBinCount);
+    return true;
+  } catch (e) { console.warn("mic blocked", e); return false; }
+}
+function stopMic() {
+  if (S.micStream) S.micStream.getTracks().forEach(t => t.stop());
+  S.micStream = null; S.analyser = null; S.dataArr = null;
+}
+
+/* ============================================================
+   SIGNAL PUMP — writes S.level, S.activity, S.spectrum
+============================================================ */
+function updateSignal(dt) {
+  let targetLevel = 0, targetActivity = 0;
+  const intensity = S.intensity / 100;
+
+  if (S.source === "mic" && S.analyser) {
+    S.analyser.getByteFrequencyData(S.dataArr);
+    // downsample to 64 bins
+    const bins = S.spectrum.length;
+    const step = Math.floor(S.dataArr.length / bins);
+    let sum = 0, peak = 0;
+    for (let i = 0; i < bins; i++) {
+      let s = 0;
+      for (let j = 0; j < step; j++) s += S.dataArr[i*step + j];
+      const v = (s/step)/255;
+      S.spectrum[i] = v;
+      sum += v; if (v > peak) peak = v;
+    }
+    targetLevel = Math.min(1, (sum/bins) * 2.2);
+    targetActivity = peak;
+  } else {
+    // simulated per-state signal
+    const t = S.t;
+    const bins = S.spectrum.length;
+    if (S.state === "idle") {
+      targetLevel = 0.08 + Math.sin(t*0.9)*0.03;
+      targetActivity = 0.08;
+      for (let i = 0; i < bins; i++) S.spectrum[i] = 0.04 + Math.sin(t*0.4 + i*0.35)*0.02;
+    } else if (S.state === "listening") {
+      // voice-like envelope: bursts + pauses
+      const burst = Math.max(0, Math.sin(t*2.6)) * (0.7 + Math.sin(t*0.7)*0.3);
+      targetLevel = 0.35 + burst*0.5;
+      targetActivity = 0.5 + Math.sin(t*3.3)*0.25;
+      for (let i = 0; i < bins; i++) {
+        const lf = Math.sin(t*2.2 + i*0.15);
+        const hf = Math.sin(t*7 + i*0.9) * 0.4;
+        // lower bins louder (voice)
+        const env = Math.exp(-i*0.04);
+        S.spectrum[i] = Math.max(0, (0.5 + lf*0.4 + hf)*env*(0.6+burst*0.5));
+      }
+    } else if (S.state === "thinking") {
+      // steady low hum + slow orbital swirl
+      targetLevel = 0.22 + Math.sin(t*0.6)*0.05;
+      targetActivity = 0.35 + Math.sin(t*0.3)*0.1;
+      for (let i = 0; i < bins; i++) {
+        S.spectrum[i] = 0.18 + Math.sin(t*0.8 + i*0.5)*0.12;
+      }
+    } else if (S.state === "speaking") {
+      // articulated output, confident
+      const syl = Math.max(0, Math.sin(t*4.2 + Math.sin(t*1.1)*2));
+      targetLevel = 0.4 + syl*0.45;
+      targetActivity = 0.7 + Math.sin(t*5)*0.2;
+      for (let i = 0; i < bins; i++) {
+        const env = Math.exp(-Math.pow(i-14, 2)/200) + Math.exp(-Math.pow(i-32,2)/500)*0.6;
+        S.spectrum[i] = Math.max(0, env * (0.5 + syl*0.5 + Math.sin(t*9 + i*0.7)*0.15));
+      }
+    }
+    targetLevel *= intensity;
+    targetActivity *= intensity;
+  }
+
+  // smoothing
+  const la = 1 - Math.exp(-dt*12);
+  const aa = 1 - Math.exp(-dt*8);
+  S.level += (targetLevel - S.level) * la;
+  S.activity += (targetActivity - S.activity) * aa;
+}
+
+/* ============================================================
+   RENDERERS
+============================================================ */
+const cvs = document.getElementById("c");
+const ctx = cvs.getContext("2d");
+let W = 0, H = 0, DPR = 1;
+function resize() {
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  W = cvs.clientWidth; H = cvs.clientHeight;
+  cvs.width = W * DPR; cvs.height = H * DPR;
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+}
+new ResizeObserver(resize).observe(cvs);
+resize();
+
+function cssToRgba(cssColor, alpha) {
+  // returns rgba() string given css color (oklch etc) by drawing to a 1px canvas
+  const c = cssToRgba._cache = cssToRgba._cache || {};
+  if (c[cssColor]) {
+    const [r,g,b] = c[cssColor];
+    return `rgba(${r},${g},${b},${alpha})`;
+  }
+  const tmp = document.createElement("canvas"); tmp.width = tmp.height = 1;
+  const tctx = tmp.getContext("2d"); tctx.fillStyle = cssColor; tctx.fillRect(0,0,1,1);
+  const d = tctx.getImageData(0,0,1,1).data;
+  c[cssColor] = [d[0], d[1], d[2]];
+  return `rgba(${d[0]},${d[1]},${d[2]},${alpha})`;
+}
+
+/* --- particle bloom ---------------------------------------- */
+const particles = [];
+const NP = 620;
+for (let i = 0; i < NP; i++) {
+  particles.push({
+    a: Math.random()*Math.PI*2,
+    r: 40 + Math.random()*180,
+    speed: 0.2 + Math.random()*0.9,
+    size: 0.6 + Math.random()*1.8,
+    hueJitter: Math.random(),
+    life: Math.random(),
+    armSeed: Math.random()*Math.PI*2,
+  });
+}
+
+function drawBloom() {
+  const cx = W/2, cy = H/2;
+  const { a, b, c } = getAccent();
+  const lvl = S.level, act = S.activity, t = S.t;
+
+  // backdrop ambient glow
+  const glowR = Math.max(W,H)*0.5;
+  const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, glowR);
+  g.addColorStop(0, cssToRgba(a, 0.16 + lvl*0.18));
+  g.addColorStop(0.4, cssToRgba(b, 0.08 + lvl*0.08));
+  g.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.fillStyle = g;
+  ctx.fillRect(0,0,W,H);
+
+  // soft rings
+  ctx.lineWidth = 1;
+  for (let k = 0; k < 3; k++) {
+    const rr = 80 + k*40 + Math.sin(t*0.6 + k)*6 + lvl*30;
+    ctx.strokeStyle = cssToRgba(a, 0.06 + lvl*0.08 - k*0.015);
+    ctx.beginPath(); ctx.arc(cx, cy, rr, 0, Math.PI*2); ctx.stroke();
+  }
+
+  // cross beams (like reference plus signs) — softer, longer fade
+  const beam = 260 + lvl*200;
+  ctx.globalCompositeOperation = "lighter";
+  for (let k = 0; k < 4; k++) {
+    const ang = t*0.04 + k*Math.PI/2;
+    const x1 = cx + Math.cos(ang)*beam;
+    const y1 = cy + Math.sin(ang)*beam;
+    const grad = ctx.createLinearGradient(cx - Math.cos(ang)*beam, cy - Math.sin(ang)*beam, x1, y1);
+    grad.addColorStop(0.00, cssToRgba(a, 0.0));
+    grad.addColorStop(0.30, cssToRgba(a, 0.04 + lvl*0.06));
+    grad.addColorStop(0.50, cssToRgba(a, 0.10 + lvl*0.14));
+    grad.addColorStop(0.70, cssToRgba(a, 0.04 + lvl*0.06));
+    grad.addColorStop(1.00, cssToRgba(a, 0.0));
+    ctx.strokeStyle = grad; ctx.lineWidth = 1.0;
+    ctx.beginPath(); ctx.moveTo(cx - Math.cos(ang)*beam, cy - Math.sin(ang)*beam); ctx.lineTo(x1, y1); ctx.stroke();
+  }
+
+  // particles — drift INWARD toward the beam core, respawn at outer edge
+  const outerR = 240 + act*80;
+  const coreReach = 8;              // how close they get before respawning
+  for (let i = 0; i < particles.length; i++) {
+    const p = particles[i];
+    p.a += 0.0008 + p.speed*0.0016 + act*0.004;
+    // life now represents inward journey: 0 = outer edge, 1 = reached core
+    p.life += 0.0015 + p.speed*0.0012 + lvl*0.0025;
+    if (p.life > 1) p.life = 0;
+
+    // radius travels from outerR down to coreReach, with a little arm wiggle
+    const arm = Math.sin(t*1.4 + p.armSeed + p.a*2) * 0.5 + 0.5;
+    const travel = 1 - p.life;        // 1 → outer, 0 → center
+    const wobble = arm * (20 + act*30) * travel;
+    const pr = coreReach + travel * (outerR - coreReach) + wobble;
+
+    const x = cx + Math.cos(p.a) * pr;
+    const y = cy + Math.sin(p.a) * pr * 0.95;
+
+    // size: small near edge, swells near core, fades at both ends
+    const nearCore = 1 - travel;                               // 0..1
+    const fade = Math.sin(Math.PI * p.life);                   // 0→1→0 over journey
+    const sz = p.size * (0.5 + lvl*1.4) * (0.6 + nearCore*1.2) * fade;
+    const col = p.hueJitter > 0.7 ? c : (p.hueJitter > 0.35 ? a : b);
+    ctx.fillStyle = cssToRgba(col, (0.3 + lvl*0.5) * fade);
+    ctx.beginPath(); ctx.arc(x, y, sz, 0, Math.PI*2); ctx.fill();
+  }
+
+  // central star
+  const starR = 6 + lvl*14;
+  const sg = ctx.createRadialGradient(cx, cy, 0, cx, cy, starR*4);
+  sg.addColorStop(0, cssToRgba(c, 0.9));
+  sg.addColorStop(0.3, cssToRgba(a, 0.5));
+  sg.addColorStop(1, cssToRgba(a, 0));
+  ctx.fillStyle = sg;
+  ctx.beginPath(); ctx.arc(cx, cy, starR*4, 0, Math.PI*2); ctx.fill();
+  ctx.globalCompositeOperation = "source-over";
+}
+
+/* --- radial spectrum bars ---------------------------------- */
+function drawBars() {
+  const cx = W/2, cy = H/2;
+  const { a, b, c } = getAccent();
+  const bins = S.spectrum.length;
+  const radius = Math.min(W,H)*0.18;
+
+  // faint ambient glow
+  const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.max(W,H)*0.5);
+  g.addColorStop(0, cssToRgba(a, 0.1 + S.level*0.1));
+  g.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.fillStyle = g; ctx.fillRect(0,0,W,H);
+
+  // inner ring
+  ctx.strokeStyle = cssToRgba(a, 0.2);
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.arc(cx, cy, radius, 0, Math.PI*2); ctx.stroke();
+
+  ctx.globalCompositeOperation = "lighter";
+  const bars = 96;
+  for (let i = 0; i < bars; i++) {
+    // mirror + symmetric map
+    const binIdx = Math.floor((i < bars/2 ? i : bars - i) / (bars/2) * (bins-1));
+    const mag = S.spectrum[binIdx];
+    const ang = (i / bars) * Math.PI * 2 - Math.PI/2;
+    const r0 = radius;
+    const r1 = radius + 20 + mag * Math.min(W,H) * 0.28;
+    const col = i%12 === 0 ? c : (i%4===0 ? b : a);
+    ctx.strokeStyle = cssToRgba(col, 0.35 + mag*0.7);
+    ctx.lineWidth = 2.2;
+    ctx.beginPath();
+    ctx.moveTo(cx + Math.cos(ang)*r0, cy + Math.sin(ang)*r0);
+    ctx.lineTo(cx + Math.cos(ang)*r1, cy + Math.sin(ang)*r1);
+    ctx.stroke();
+  }
+  ctx.globalCompositeOperation = "source-over";
+
+  // center dot
+  ctx.fillStyle = cssToRgba(c, 0.9);
+  ctx.beginPath(); ctx.arc(cx, cy, 3 + S.level*6, 0, Math.PI*2); ctx.fill();
+}
+
+/* --- concentric orbits ------------------------------------- */
+function drawOrbit() {
+  const cx = W/2, cy = H/2;
+  const { a, b, c } = getAccent();
+  const t = S.t, lvl = S.level, act = S.activity;
+
+  // ambient
+  const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.max(W,H)*0.5);
+  g.addColorStop(0, cssToRgba(a, 0.12 + lvl*0.12));
+  g.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.fillStyle = g; ctx.fillRect(0,0,W,H);
+
+  const rings = 5;
+  ctx.globalCompositeOperation = "lighter";
+  for (let k = 0; k < rings; k++) {
+    const base = 50 + k*36;
+    const rr = base + Math.sin(t*0.7 + k*1.3)*6 + lvl*28;
+    ctx.lineWidth = 1 + (k===Math.floor(lvl*rings)?1:0);
+    ctx.strokeStyle = cssToRgba(k%2===0 ? a : b, 0.18 + lvl*0.25 - k*0.025);
+    ctx.beginPath();
+    // distort ring with spectrum
+    const pts = 180;
+    for (let i = 0; i <= pts; i++) {
+      const ang = (i/pts) * Math.PI*2;
+      const bin = Math.floor((i/pts) * S.spectrum.length) % S.spectrum.length;
+      const wob = S.spectrum[bin] * 18 * (1 - k/rings);
+      const r = rr + wob;
+      const x = cx + Math.cos(ang)*r;
+      const y = cy + Math.sin(ang)*r;
+      if (i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+    }
+    ctx.stroke();
+  }
+
+  // orbiting dots
+  const dots = 8;
+  for (let i = 0; i < dots; i++) {
+    const ang = t*0.6 + i*(Math.PI*2/dots);
+    const r = 110 + Math.sin(t*0.9 + i)*20 + lvl*30;
+    const x = cx + Math.cos(ang)*r;
+    const y = cy + Math.sin(ang)*r;
+    ctx.fillStyle = cssToRgba(i%3===0?c:a, 0.8);
+    ctx.beginPath(); ctx.arc(x, y, 2 + act*3, 0, Math.PI*2); ctx.fill();
+  }
+
+  // core
+  const core = 8 + lvl*20;
+  const sg = ctx.createRadialGradient(cx, cy, 0, cx, cy, core*3);
+  sg.addColorStop(0, cssToRgba(c, 0.95));
+  sg.addColorStop(0.4, cssToRgba(a, 0.5));
+  sg.addColorStop(1, cssToRgba(a, 0));
+  ctx.fillStyle = sg;
+  ctx.beginPath(); ctx.arc(cx, cy, core*3, 0, Math.PI*2); ctx.fill();
+  ctx.globalCompositeOperation = "source-over";
+}
+
+/* --- waveform ribbon --------------------------------------- */
+const waveHist = []; const WAVE_MAX = 220;
+function drawRibbon() {
+  const cx = W/2, cy = H/2;
+  const { a, b, c } = getAccent();
+  const t = S.t;
+
+  // ambient
+  const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.max(W,H)*0.6);
+  g.addColorStop(0, cssToRgba(a, 0.1 + S.level*0.1));
+  g.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.fillStyle = g; ctx.fillRect(0,0,W,H);
+
+  // push current sample
+  waveHist.push(S.level + (Math.random()-0.5)*0.04);
+  if (waveHist.length > WAVE_MAX) waveHist.shift();
+
+  // draw 3 stacked ribbons for depth
+  ctx.globalCompositeOperation = "lighter";
+  const centerY = cy;
+  const spanX = W * 0.7;
+  const startX = cx - spanX/2;
+
+  for (let layer = 0; layer < 3; layer++) {
+    const col = layer === 0 ? a : (layer === 1 ? b : c);
+    const amp = (layer === 0 ? 140 : layer === 1 ? 90 : 50);
+    const yOff = (layer - 1) * 24;
+    ctx.strokeStyle = cssToRgba(col, 0.35 + S.level*0.4);
+    ctx.lineWidth = 2 - layer*0.4;
+    ctx.beginPath();
+    for (let i = 0; i < waveHist.length; i++) {
+      const x = startX + (i / (WAVE_MAX-1)) * spanX;
+      const phase = Math.sin(t*2 + i*0.15 + layer*1.5);
+      const y = centerY + yOff + phase * amp * (0.2 + waveHist[i]*1.4);
+      if (i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+    }
+    ctx.stroke();
+
+    // mirror
+    ctx.strokeStyle = cssToRgba(col, 0.2 + S.level*0.25);
+    ctx.beginPath();
+    for (let i = 0; i < waveHist.length; i++) {
+      const x = startX + (i / (WAVE_MAX-1)) * spanX;
+      const phase = Math.sin(t*2 + i*0.15 + layer*1.5);
+      const y = centerY + yOff - phase * amp * (0.2 + waveHist[i]*1.4);
+      if (i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+    }
+    ctx.stroke();
+  }
+
+  // center vertical line
+  ctx.strokeStyle = cssToRgba(a, 0.15);
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(cx, centerY - 180); ctx.lineTo(cx, centerY + 180); ctx.stroke();
+  ctx.globalCompositeOperation = "source-over";
+}
+
+/* --- supernova ray-burst ----------------------------------- */
+// dense rays + crystalline core + shimmer particles
+const novaRays = [];
+const NR = 220;
+for (let i = 0; i < NR; i++) {
+  novaRays.push({
+    a: Math.random() * Math.PI * 2,
+    len: 0.5 + Math.random() * 1.0,      // relative length
+    width: 0.6 + Math.random() * 1.6,
+    seed: Math.random() * 10,
+    wave: 0.6 + Math.random() * 0.8,
+  });
+}
+const novaMotes = [];
+const NM = 900;
+for (let i = 0; i < NM; i++) {
+  novaMotes.push({
+    a: Math.random() * Math.PI * 2,
+    r: 30 + Math.random() * 260,
+    drift: (Math.random() - 0.5) * 0.4,
+    size: 0.4 + Math.random() * 1.6,
+    phase: Math.random() * Math.PI * 2,
+    tier: Math.random(),
+  });
+}
+
+function drawNova() {
+  const cx = W / 2, cy = H / 2;
+  const { a, b, c } = getAccent();
+  const t = S.t, lvl = S.level, act = S.activity;
+  const maxR = Math.min(W, H) * 0.45;
+
+  // deep ambient halo
+  const halo = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.max(W, H) * 0.55);
+  halo.addColorStop(0, cssToRgba(a, 0.22 + lvl * 0.22));
+  halo.addColorStop(0.35, cssToRgba(b, 0.10 + lvl * 0.10));
+  halo.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.fillStyle = halo;
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.globalCompositeOperation = "lighter";
+
+  // rays — dense radial streaks, fading outward, shimmering with spectrum
+  for (let i = 0; i < novaRays.length; i++) {
+    const r = novaRays[i];
+    const bin = Math.floor((i / novaRays.length) * S.spectrum.length) % S.spectrum.length;
+    const mag = S.spectrum[bin];
+    const pulse = 0.5 + 0.5 * Math.sin(t * 2.4 * r.wave + r.seed);
+    const len = maxR * (0.42 + r.len * 0.55) * (0.55 + lvl * 0.9 + mag * 0.5) * (0.85 + pulse * 0.3);
+    const ax = Math.cos(r.a), ay = Math.sin(r.a);
+    const x1 = cx + ax * 14;
+    const y1 = cy + ay * 14;
+    const x2 = cx + ax * len;
+    const y2 = cy + ay * len;
+
+    const col = i % 9 === 0 ? c : (i % 3 === 0 ? b : a);
+    const grad = ctx.createLinearGradient(x1, y1, x2, y2);
+    grad.addColorStop(0, cssToRgba(col, 0.0));
+    grad.addColorStop(0.08, cssToRgba(col, 0.7 + lvl * 0.3));
+    grad.addColorStop(0.55, cssToRgba(col, 0.35 + lvl * 0.25));
+    grad.addColorStop(1, cssToRgba(col, 0));
+    ctx.strokeStyle = grad;
+    ctx.lineWidth = r.width * (0.7 + lvl * 1.0);
+    ctx.beginPath();
+    ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+
+    // shimmer dots along each ray
+    const dots = 7;
+    for (let d = 1; d < dots; d++) {
+      const f = d / dots + (pulse * 0.03);
+      const dx = cx + ax * len * f;
+      const dy = cy + ay * len * f;
+      const dsz = (1.2 - f * 0.8) * (0.6 + lvl * 1.4);
+      ctx.fillStyle = cssToRgba(col, (0.55 - f * 0.4) + lvl * 0.3);
+      ctx.beginPath(); ctx.arc(dx, dy, dsz, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+
+  // motes — swirling particle cloud around core
+  for (let i = 0; i < novaMotes.length; i++) {
+    const m = novaMotes[i];
+    m.a += (0.002 + m.drift * 0.008) + act * 0.006;
+    const breath = Math.sin(t * 1.1 + m.phase) * 0.5 + 0.5;
+    const rr = m.r * (0.8 + breath * 0.35) * (0.7 + lvl * 0.7);
+    const x = cx + Math.cos(m.a) * rr;
+    const y = cy + Math.sin(m.a) * rr;
+    const col = m.tier > 0.82 ? c : (m.tier > 0.45 ? a : b);
+    const sz = m.size * (0.5 + lvl * 1.6) * (0.6 + breath * 0.8);
+    ctx.fillStyle = cssToRgba(col, 0.28 + lvl * 0.45 + breath * 0.15);
+    ctx.beginPath(); ctx.arc(x, y, sz, 0, Math.PI * 2); ctx.fill();
+  }
+
+  // 4-point diamond cross-glint (like reference plus shapes)
+  const glint = 90 + lvl * 140;
+  for (let k = 0; k < 4; k++) {
+    const ang = k * Math.PI / 2 + t * 0.15;
+    const ex = cx + Math.cos(ang) * glint;
+    const ey = cy + Math.sin(ang) * glint;
+    const gg = ctx.createLinearGradient(cx, cy, ex, ey);
+    gg.addColorStop(0, cssToRgba(c, 0.0));
+    gg.addColorStop(0.5, cssToRgba(c, 0.45 + lvl * 0.4));
+    gg.addColorStop(1, cssToRgba(c, 0));
+    ctx.strokeStyle = gg; ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(cx - Math.cos(ang) * glint, cy - Math.sin(ang) * glint);
+    ctx.lineTo(ex, ey); ctx.stroke();
+  }
+
+  // crystalline core
+  const coreR = 14 + lvl * 34;
+  const cg = ctx.createRadialGradient(cx, cy, 0, cx, cy, coreR * 4);
+  cg.addColorStop(0, cssToRgba(c, 1.0));
+  cg.addColorStop(0.15, cssToRgba(c, 0.85));
+  cg.addColorStop(0.45, cssToRgba(a, 0.45));
+  cg.addColorStop(1, cssToRgba(a, 0));
+  ctx.fillStyle = cg;
+  ctx.beginPath(); ctx.arc(cx, cy, coreR * 4, 0, Math.PI * 2); ctx.fill();
+
+  // tiny bright pinpoint
+  ctx.fillStyle = "rgba(255,255,255,0.95)";
+  ctx.beginPath(); ctx.arc(cx, cy, 1.8 + lvl * 2, 0, Math.PI * 2); ctx.fill();
+
+  ctx.globalCompositeOperation = "source-over";
+}
+
+/* --- companion orb (dementia-friendly) --------------------- */
+// single gentle orb, very slow pulsing, soft concentric waves,
+// low contrast edges, no sharp particles or rays
+function drawCalm() {
+  const cx = W/2, cy = H/2;
+  const { a, b, c } = getAccent();
+  const t = S.t, lvl = S.level;
+  const R = Math.min(W, H);
+
+  // soft vignette / backdrop glow — very diffuse
+  const back = ctx.createRadialGradient(cx, cy, 0, cx, cy, R*0.75);
+  back.addColorStop(0, cssToRgba(a, 0.12 + lvl*0.08));
+  back.addColorStop(0.5, cssToRgba(b, 0.05 + lvl*0.04));
+  back.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.fillStyle = back;
+  ctx.fillRect(0, 0, W, H);
+
+  // slow concentric waves (ripple pool) — smooth, flowing
+  ctx.globalCompositeOperation = "lighter";
+  const baseRadius = R * 0.16;
+  const waves = 4;
+  for (let k = 0; k < waves; k++) {
+    // waves expand over ~8s each, staggered
+    const phase = ((t * 0.12) + k / waves) % 1;
+    const rr = baseRadius + phase * R * 0.32;
+    // opacity fades as the wave expands outward (softens far edges)
+    const fade = Math.sin(phase * Math.PI);   // 0→1→0
+    const alpha = (0.08 + lvl * 0.10) * fade;
+    ctx.strokeStyle = cssToRgba(k % 2 === 0 ? a : b, alpha);
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(cx, cy, rr, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  // main orb — single, large, soft-edged, slow pulse
+  const pulse = 0.5 + 0.5 * Math.sin(t * 0.6);            // ~10s breathing cycle
+  const orbR = baseRadius * (0.92 + pulse * 0.08 + lvl * 0.22);
+
+  // outer halo
+  const halo = ctx.createRadialGradient(cx, cy, orbR * 0.4, cx, cy, orbR * 2.4);
+  halo.addColorStop(0, cssToRgba(a, 0.16 + lvl * 0.08));
+  halo.addColorStop(0.45, cssToRgba(b, 0.08 + lvl * 0.04));
+  halo.addColorStop(1, cssToRgba(a, 0));
+  ctx.fillStyle = halo;
+  ctx.beginPath();
+  ctx.arc(cx, cy, orbR * 2.4, 0, Math.PI * 2);
+  ctx.fill();
+
+  // orb body — smooth gradient, warm highlight
+  const body = ctx.createRadialGradient(cx - orbR*0.2, cy - orbR*0.25, 0, cx, cy, orbR);
+  body.addColorStop(0, cssToRgba(c, 0.16));               // very soft warm highlight
+  body.addColorStop(0.35, cssToRgba(a, 0.24));            // soft blue
+  body.addColorStop(0.85, cssToRgba(b, 0.22));            // blue-green edge
+  body.addColorStop(1, cssToRgba(b, 0.0));
+  ctx.fillStyle = body;
+  ctx.beginPath();
+  ctx.arc(cx, cy, orbR, 0, Math.PI * 2);
+  ctx.fill();
+
+  // gentle rim light — very subtle, no hard edge
+  ctx.strokeStyle = cssToRgba(c, 0.08 + lvl * 0.06);
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(cx, cy, orbR * 0.98, 0, Math.PI * 2);
+  ctx.stroke();
+
+  ctx.globalCompositeOperation = "source-over";
+}
+
+/* ============================================================
+   MAIN LOOP
+============================================================ */
+let last = performance.now();
+function loop(now) {
+  const dt = Math.min(0.05, (now - last)/1000);
+  last = now;
+  S.t += dt;
+
+  updateSignal(dt);
+
+  // clear with slight motion-blur wash
+  ctx.fillStyle = "rgba(5, 8, 20, 0.22)";
+  ctx.fillRect(0,0,W,H);
+
+  if (S.style === "bloom") drawBloom();
+  else if (S.style === "bars") drawBars();
+  else if (S.style === "orbit") drawOrbit();
+  else if (S.style === "ribbon") drawRibbon();
+  else if (S.style === "nova") drawNova();
+  else if (S.style === "calm") drawCalm();
+
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+/* ============================================================
+   CONTROLS
+============================================================ */
+// style tabs (top)
+document.getElementById("styleTabs").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  setStyle(b.dataset.style);
+});
+
+function setStyle(style) {
+  S.style = style;
+  document.querySelectorAll("#styleTabs button").forEach(x => x.classList.toggle("active", x.dataset.style === style));
+  document.querySelectorAll("#tweakStyle button").forEach(x => x.classList.toggle("active", x.dataset.style === style));
+  persist({style});
+}
+
+// suggestion chips
+document.querySelectorAll(".chip").forEach(c => c.addEventListener("click", () => {
+  convoIdx = 0;
+  setTranscript("You", c.dataset.prompt);
+  setState("listening");
+  clearTimeout(convoTimer);
+  convoTimer = setTimeout(() => { convoIdx = 1; playConvo(); }, 1600);
+}));
+
+// mic button toggles conversation simulation (or mic if source=mic)
+const micBtn = document.getElementById("micBtn");
+const micMeta = document.getElementById("micMeta");
+let running = false;
+micBtn.addEventListener("click", async () => {
+  running = !running;
+  micBtn.classList.toggle("live", running);
+  document.getElementById("centerLabel").style.opacity = 0;
+  if (running) {
+    micMeta.textContent = S.source === "mic" ? "Listening · mic" : "Active";
+    if (S.source === "mic") {
+      const ok = await startMic();
+      if (!ok) { micMeta.textContent = "Mic blocked · simulating"; S.source = "sim"; updateSourceUI(); }
+    }
+    convoIdx = 0;
+    playConvo();
+  } else {
+    stopConvo();
+    stopMic();
+    setState("idle");
+    setTranscript("Halo", "Ask me anything — I'm listening.");
+    micMeta.textContent = "Press to talk";
+  }
+});
+
+// tweaks
+const tweakStyleEl = document.getElementById("tweakStyle");
+const tweakPaletteEl = document.getElementById("tweakPalette");
+const tweakStateEl = document.getElementById("tweakState");
+const tweakSourceEl = document.getElementById("tweakSource");
+const intRange = document.getElementById("intRange");
+const intVal = document.getElementById("intVal");
+
+tweakStyleEl.addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  setStyle(b.dataset.style);
+});
+tweakPaletteEl.addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  S.palette = b.dataset.pal;
+  applyPalette(S.palette);
+  document.querySelectorAll("#tweakPalette button").forEach(x => x.classList.toggle("active", x.dataset.pal === S.palette));
+  persist({palette: S.palette});
+});
+tweakStateEl.addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  S.forceState = b.dataset.st;
+  document.querySelectorAll("#tweakState button").forEach(x => x.classList.toggle("active", x.dataset.st === S.forceState));
+  if (S.forceState === "auto") {
+    // resume convo
+    convoIdx = 0; stopConvo(); if (running) playConvo();
+  } else {
+    stopConvo();
+    setState(S.forceState);
+    const msg = {idle: "Ask me anything — I'm listening.", listening: "Go ahead, I'm listening…", thinking: "Thinking…", speaking: "This is a continuous simulated response to preview the speaking state."}[S.forceState];
+    setTranscript(S.forceState === "listening" ? "You" : "Halo", msg, S.forceState === "speaking");
+  }
+  persist({forceState: S.forceState});
+});
+tweakSourceEl.addEventListener("click", async e => {
+  const b = e.target.closest("button"); if (!b) return;
+  const was = S.source;
+  S.source = b.dataset.src;
+  updateSourceUI();
+  if (was !== "mic" && S.source === "mic" && running) {
+    const ok = await startMic();
+    if (!ok) { S.source = "sim"; updateSourceUI(); }
+  } else if (was === "mic" && S.source !== "mic") {
+    stopMic();
+  }
+  persist({source: S.source});
+});
+function updateSourceUI(){
+  document.querySelectorAll("#tweakSource button").forEach(x => x.classList.toggle("active", x.dataset.src === S.source));
+}
+intRange.addEventListener("input", () => {
+  S.intensity = +intRange.value; intVal.textContent = S.intensity;
+  persist({intensity: S.intensity});
+});
+
+// init UI reflect defaults
+setStyle(S.style);
+document.querySelectorAll("#tweakPalette button").forEach(x => x.classList.toggle("active", x.dataset.pal === S.palette));
+document.querySelectorAll("#tweakState button").forEach(x => x.classList.toggle("active", x.dataset.st === S.forceState));
+updateSourceUI();
+intRange.value = S.intensity; intVal.textContent = S.intensity;
+
+/* ============================================================
+   EDIT MODE (Tweaks toggle)
+============================================================ */
+window.addEventListener("message", ev => {
+  const d = ev.data || {};
+  if (d.type === "__activate_edit_mode") document.getElementById("tweaks").classList.add("show");
+  else if (d.type === "__deactivate_edit_mode") document.getElementById("tweaks").classList.remove("show");
+  else if (d.type === "gemma_state") {
+    // Parent app controls our state
+    if (d.state) setState(d.state);
+    if (d.style) setStyle(d.style);
+  }
+});
+window.parent.postMessage({type: "__edit_mode_available"}, "*");
+
+function persist(patch) {
+  window.parent.postMessage({type: "__edit_mode_set_keys", edits: patch}, "*");
+}
+
+// keyboard: 1-4 switch styles
+window.addEventListener("keydown", e => {
+  if (e.key === "1") setStyle("bloom");
+  else if (e.key === "2") setStyle("bars");
+  else if (e.key === "3") setStyle("orbit");
+  else if (e.key === "4") setStyle("ribbon");
+  else if (e.key === "5") setStyle("nova");
+  else if (e.key === "6") setStyle("calm");
+  else if (e.key === " ") { e.preventDefault(); micBtn.click(); }
+});
+</script>
+</body>
+</html>

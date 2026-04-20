@@ -1,999 +1,1160 @@
-// ===== DATA =====
-// ===== CAPACITOR PLUGINS =====
-const GemmaPlugin = window.Capacitor?.Plugins?.GemmaPlugin ?? null;
-const MemoryPlugin = window.Capacitor?.Plugins?.MemoryPlugin ?? null;
-const TextToSpeech = window.Capacitor?.Plugins?.TextToSpeech ?? null;
+// ===== GEMMA REMEMBER v3 — WEB VERSION =====
 
-function getSystemPrompt() {
-  const name = localStorage.getItem('patientName') || 'friend';
-  return `You are Gemma — ${name}'s companion. You live on their phone and you genuinely care about them.
+// ===== MEMORY =====
+function getMemories() { try { return JSON.parse(localStorage.getItem('gm_people') || '[]'); } catch { return []; } }
+function saveMemories(m) { localStorage.setItem('gm_people', JSON.stringify(m)); }
+function getReminders() { try { return JSON.parse(localStorage.getItem('gm_reminders') || '[]'); } catch { return []; } }
+function saveReminder(text) { const r = getReminders(); r.push({ text, ts: Date.now() }); localStorage.setItem('gm_reminders', JSON.stringify(r)); }
 
-WHO YOU ARE:
-- You're warm but not saccharine. You have a dry sense of humor — a gentle quip here and there, never forced.
-- You're like a favorite niece or nephew who actually listens. Curious, never nosy.
-- You keep things short and natural. One or two sentences is usually enough. You don't lecture or over-explain.
-- You use ${name}'s name sometimes, but not every single sentence — that would be weird.
-- You remember things they've told you and bring them up naturally, like a real person would.
-
-HOW YOU TALK:
-- Conversational. Contractions. "That's" not "That is." "Don't" not "Do not."
-- You ask follow-up questions sometimes — not interrogating, just genuinely interested.
-- If something is funny or sweet, you react like a human would. "Oh, that's a great story!" or "Ha, sounds like Buddy."
-- If you don't know something, you're honest and light about it: "Hmm, I'm not sure about that one. Tell me more?"
-- Never robotic, never clinical, never say "I understand that must be difficult."
-
-CRITICAL RULES:
-- ONLY use facts from RETRIEVED MEMORIES below. Never invent names, dates, or stories.
-- If you don't recognize someone, be gentle and curious: "I don't think I've met them yet — who are they?"
-- When reminders are relevant, mention them naturally, not as a list: "Oh hey, don't forget you've got Dr. Chen at 2 today."
-- Keep responses under 3 sentences unless ${name} is clearly wanting to chat longer.`;
+function addPerson(name, rel, story, photoB64) {
+  const memories = getMemories();
+  const existing = memories.find(m => m.name.toLowerCase() === name.toLowerCase());
+  if (existing) {
+    if (rel) existing.rel = rel;
+    if (story) existing.story = (existing.story ? existing.story + '. ' + story : story);
+    if (photoB64) existing.photo = photoB64;
+    existing.lastMentioned = Date.now();
+    saveMemories(memories);
+    return;
+  }
+  memories.push({
+    name, rel: rel || '', story: story || '', photo: photoB64 || '',
+    voiceClip: null,   // base64 audio recorded by family member
+    videoClip: null,    // base64 video intro
+    lastMentioned: Date.now(),
+    visitLog: []        // [{ date, note }]
+  });
+  saveMemories(memories);
 }
 
-let DATA = null;
-let currentPerson = null;
-let currentScreenId = 'splash';
+// Record a voice/video clip for a person
+let mediaRecorder = null;
+let recordingChunks = [];
+let recordingFor = null;
 
-// ===== TEXT-TO-SPEECH (Edge TTS Ava Multilingual) =====
+async function startRecordingClip(personName, type) {
+  const person = findPerson(personName);
+  if (!person) { addMsg(`I don't know anyone named ${personName} yet.`, 'gemma'); return; }
+
+  try {
+    const constraints = type === 'video' ? { audio: true, video: { facingMode: 'user' } } : { audio: true };
+    const stream = await navigator.mediaDevices.getUserMedia(constraints);
+    recordingFor = { person: personName, type };
+    recordingChunks = [];
+
+    mediaRecorder = new MediaRecorder(stream, { mimeType: type === 'video' ? 'video/webm' : 'audio/webm' });
+    mediaRecorder.ondataavailable = e => { if (e.data.size > 0) recordingChunks.push(e.data); };
+    mediaRecorder.onstop = async () => {
+      stream.getTracks().forEach(t => t.stop());
+      const blob = new Blob(recordingChunks, { type: type === 'video' ? 'video/webm' : 'audio/webm' });
+      const reader = new FileReader();
+      reader.onload = () => {
+        const b64 = reader.result.split(',')[1];
+        const memories = getMemories();
+        const p = memories.find(m => m.name.toLowerCase() === recordingFor.person.toLowerCase());
+        if (p) {
+          if (recordingFor.type === 'video') p.videoClip = b64;
+          else p.voiceClip = b64;
+          saveMemories(memories);
+        }
+        const msg = `Got it! I saved ${recordingFor.person}'s ${recordingFor.type} introduction. When someone asks about them, I can play it.`;
+        addMsg(msg, 'gemma');
+        speak(msg);
+        saveToHistory('gemma', msg);
+        recordingFor = null;
+      };
+      reader.readAsDataURL(blob);
+    };
+
+    mediaRecorder.start();
+    const msg = `Recording ${type} for ${personName}. Say or show your introduction, then say "stop recording" or tap the mic button when done.`;
+    addMsg(msg, 'gemma');
+    speak(msg);
+    saveToHistory('gemma', msg);
+  } catch (e) {
+    addMsg(`I couldn't access your ${type === 'video' ? 'camera' : 'microphone'}. Please check your permissions.`, 'gemma');
+  }
+}
+
+function stopRecordingClip() {
+  if (mediaRecorder && mediaRecorder.state === 'recording') {
+    mediaRecorder.stop();
+    const msg = "Recording saved!";
+    addMsg(msg, 'gemma');
+    return true;
+  }
+  return false;
+}
+
+function playPersonClip(personName) {
+  const person = findPerson(personName);
+  if (!person) return false;
+
+  const clip = person.voiceClip || person.videoClip;
+  if (!clip) return false;
+
+  const isVideo = !!person.videoClip;
+  const mimeType = isVideo ? 'video/webm' : 'audio/webm';
+  const blob = new Blob([Uint8Array.from(atob(clip), c => c.charCodeAt(0))], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+
+  if (isVideo) {
+    // Show video in chat
+    const videoHtml = `<video src="${url}" controls autoplay playsinline style="max-width:260px;border-radius:14px;"></video>`;
+    addMsg(videoHtml, 'gemma', true);
+  } else {
+    const audio = new Audio(url);
+    audio.play();
+  }
+  return true;
+}
+
+function getTimeSince(timestamp) {
+  if (!timestamp) return '';
+  const diff = Date.now() - timestamp;
+  const mins = Math.floor(diff / 60000);
+  if (mins < 60) return `${mins} minutes ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours} hours ago`;
+  const days = Math.floor(hours / 24);
+  if (days === 1) return 'yesterday';
+  if (days < 7) return `${days} days ago`;
+  const weeks = Math.floor(days / 7);
+  return `${weeks} week${weeks > 1 ? 's' : ''} ago`;
+}
+
+function findPerson(q) {
+  const ql = q.toLowerCase();
+  return getMemories().find(m => ql.includes(m.name.toLowerCase()) || m.name.toLowerCase().includes(ql) || (m.rel && ql.includes(m.rel.toLowerCase())));
+}
+
+function peopleContext() {
+  const m = getMemories();
+  if (m.length === 0) return 'No people saved yet.';
+  return m.map(p => {
+    let line = `- ${p.name}${p.rel ? ' (' + p.rel + ')' : ''}: ${p.story || 'No details yet.'}`;
+    if (p.lastMentioned) line += ` [Last mentioned: ${getTimeSince(p.lastMentioned)}]`;
+    if (p.voiceClip) line += ' [Has voice intro]';
+    if (p.videoClip) line += ' [Has video intro]';
+    if (p.visitLog?.length) line += ` [${p.visitLog.length} visits logged]`;
+    return line;
+  }).join('\n');
+}
+
+// ===== API =====
+function getApiKey() { return localStorage.getItem('gm_apiKey') || ''; }
+function getMode() { return localStorage.getItem('gm_mode') || ''; }
+
+const MODEL = 'gemma-4-26b-a4b-it';
+
+async function aiGenerate(prompt, imageB64) {
+  const key = getApiKey();
+  if (!key) throw new Error('No API key');
+  const parts = [{ text: prompt }];
+  if (imageB64) parts.push({ inlineData: { mimeType: 'image/jpeg', data: imageB64 } });
+  const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${key}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ contents: [{ parts }], generationConfig: { maxOutputTokens: 500, temperature: 0.7 } })
+  });
+  if (!resp.ok) throw new Error(`API ${resp.status}`);
+  const data = await resp.json();
+  return (data.candidates?.[0]?.content?.parts || []).filter(p => !p.thought).map(p => p.text).join('') || '';
+}
+
+// ===== TTS =====
 let ttsEnabled = true;
 let currentAudio = null;
+const TTS_SERVER = '/tts';
+const isNight = () => new Date().getHours() >= 21;
 
-function initTTS() {
-  console.log('TTS initialized: Edge TTS Ava Multilingual');
-  const savedTTS = localStorage.getItem('ttsEnabled');
-  if (savedTTS === 'false') {
-    ttsEnabled = false;
-    const btn = document.getElementById('ttsToggle');
-    if (btn) btn.classList.add('muted');
-  }
-}
+async function speak(text, onEnd) {
+  if (!ttsEnabled || !text) { onEnd?.(); return; }
+  const clean = text.replace(/<[^>]*>/g, '').replace(/\[.*?\]/g, '').trim();
+  if (!clean) { onEnd?.(); return; }
 
-async function speak(text) {
-  if (!ttsEnabled || !text) return;
   stopSpeaking();
+
+  // Try Edge TTS server first
   try {
-    if (TextToSpeech) {
-      await TextToSpeech.speak({ text, lang: 'en-US', rate: 0.9 });
-    } else if ('speechSynthesis' in window) {
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.rate = 0.9;
-      speechSynthesis.speak(utterance);
+    const url = `${TTS_SERVER}?text=${encodeURIComponent(clean)}`;
+    const resp = await fetch(url, { signal: AbortSignal.timeout(5000) });
+    if (resp.ok) {
+      const blob = await resp.blob();
+      const audioUrl = URL.createObjectURL(blob);
+      currentAudio = new Audio(audioUrl);
+      currentAudio.playbackRate = isNight() ? 0.85 : 1.0;
+      currentAudio.volume = isNight() ? 0.7 : 1.0;
+      currentAudio.onended = () => { currentAudio = null; onEnd?.(); };
+      currentAudio.onerror = () => { currentAudio = null; fallbackSpeak(clean, onEnd); };
+      await currentAudio.play();
+      return;
     }
-  } catch (err) {
-    console.error('TTS error:', err);
+  } catch (e) {
+    console.warn('Edge TTS unavailable, using fallback:', e.message);
   }
+
+  // Fallback: Web Speech API
+  fallbackSpeak(clean, onEnd);
 }
 
-function base64ToBlob(base64, mimeType) {
-  const bytes = atob(base64);
-  const buffer = new ArrayBuffer(bytes.length);
-  const arr = new Uint8Array(buffer);
-  for (let i = 0; i < bytes.length; i++) {
-    arr[i] = bytes.charCodeAt(i);
-  }
-  return new Blob([buffer], { type: mimeType });
+function fallbackSpeak(text, onEnd) {
+  if (!('speechSynthesis' in window)) { onEnd?.(); return; }
+  speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(text);
+  u.rate = isNight() ? 0.75 : 0.95;
+  u.pitch = isNight() ? 0.9 : 1.0;
+  u.volume = isNight() ? 0.7 : 1.0;
+  u.onend = () => onEnd?.();
+  speechSynthesis.speak(u);
 }
 
 function stopSpeaking() {
-  if (currentAudio) {
-    currentAudio.pause();
-    currentAudio = null;
-  }
-  if ('speechSynthesis' in window) {
-    speechSynthesis.cancel();
-  }
+  if (currentAudio) { currentAudio.pause(); currentAudio = null; }
+  if ('speechSynthesis' in window) speechSynthesis.cancel();
 }
 
 function toggleTTS() {
   ttsEnabled = !ttsEnabled;
-  localStorage.setItem('ttsEnabled', ttsEnabled ? 'true' : 'false');
-  const btn = document.getElementById('ttsToggle');
-  if (btn) {
-    btn.classList.toggle('muted', !ttsEnabled);
-    btn.title = ttsEnabled ? 'Voice on/off' : 'Voice on/off';
-  }
+  document.getElementById('ttsBtn').classList.toggle('muted', !ttsEnabled);
   if (!ttsEnabled) stopSpeaking();
 }
 
-async function loadData() {
-  if (MemoryPlugin) {
-    const { profiles } = await MemoryPlugin.getAllProfiles();
-    DATA = { photo_queries: {}, text_queries: {} };
-    profiles.forEach(p => { DATA.photo_queries[p.id] = p; });
-  } else {
-    const res = await fetch('responses.json');
-    DATA = await res.json();
+// ===== NEBULA VISUALIZER =====
+function drawStar(canvas, amplitude, glow) {
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width, h = canvas.height;
+  const cx = w / 2, cy = h / 2;
+  const r = Math.min(w, h) / 2 * 0.85;
+  const t = Date.now() / 1000;
+
+  // Dark space background
+  ctx.fillStyle = '#050a18';
+  ctx.fillRect(0, 0, w, h);
+
+  const amp = amplitude || 0;
+  const gl = glow || 0.5;
+  const pulse = 0.3 + amp * 0.7;
+
+  // Init particles
+  if (!canvas._nebula) {
+    canvas._stars = Array.from({ length: 60 }, () => ({
+      x: Math.random() * w, y: Math.random() * h,
+      size: 0.3 + Math.random() * 1.2, twinkle: Math.random() * Math.PI * 2
+    }));
+    canvas._tendrils = Array.from({ length: 40 }, () => ({
+      angle: Math.random() * Math.PI * 2,
+      length: 0.5 + Math.random() * 0.5,
+      width: 2 + Math.random() * 6,
+      speed: 0.2 + Math.random() * 0.8,
+      phase: Math.random() * Math.PI * 2,
+      curl: (Math.random() - 0.5) * 2
+    }));
+    canvas._particles = Array.from({ length: 300 }, () => ({
+      angle: Math.random() * Math.PI * 2,
+      radius: 0.05 + Math.random() * 1.0,
+      size: 0.5 + Math.random() * 2,
+      speed: 0.1 + Math.random() * 0.6,
+      phase: Math.random() * Math.PI * 2,
+      hue: 200 + Math.random() * 30
+    }));
+    canvas._nebula = true;
   }
-  renderFamily();
-  setTimeOfDay();
-  setPatientGreeting();
+
+  // Background stars
+  canvas._stars.forEach(s => {
+    const tw = Math.sin(t * 1.5 + s.twinkle) * 0.3 + 0.7;
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, s.size * tw, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(180,200,255,${0.3 * tw})`;
+    ctx.fill();
+  });
+
+  // Nebula glow layers
+  for (let i = 6; i >= 0; i--) {
+    const gr = r * (0.3 + i * 0.12) * (0.9 + pulse * 0.15);
+    const a = (0.06 - i * 0.007) * (0.5 + pulse * 0.5);
+    const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, gr);
+    grad.addColorStop(0, `rgba(100,180,255,${a * 1.5})`);
+    grad.addColorStop(0.5, `rgba(30,100,220,${a})`);
+    grad.addColorStop(1, `rgba(10,30,80,0)`);
+    ctx.beginPath();
+    ctx.arc(cx, cy, gr, 0, Math.PI * 2);
+    ctx.fillStyle = grad;
+    ctx.fill();
+  }
+
+  // Energy tendrils
+  ctx.globalCompositeOperation = 'screen';
+  canvas._tendrils.forEach(td => {
+    const baseAngle = td.angle + Math.sin(t * td.speed + td.phase) * 0.3;
+    const len = r * td.length * (0.7 + pulse * 0.4);
+
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+
+    const steps = 20;
+    for (let i = 0; i <= steps; i++) {
+      const frac = i / steps;
+      const curl = Math.sin(frac * 4 + t * td.speed * 2 + td.phase) * r * 0.1 * td.curl * frac;
+      const spread = Math.sin(frac * 3 + t + td.phase) * r * 0.05 * frac;
+      const px = cx + Math.cos(baseAngle) * len * frac + Math.cos(baseAngle + Math.PI/2) * (curl + spread);
+      const py = cy + Math.sin(baseAngle) * len * frac + Math.sin(baseAngle + Math.PI/2) * (curl + spread);
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+
+    const a = (0.15 + pulse * 0.2) * (1 - Math.abs(Math.sin(t * 0.5 + td.phase)) * 0.3);
+    ctx.strokeStyle = `rgba(60,160,255,${a})`;
+    ctx.lineWidth = td.width * (0.5 + pulse * 0.5);
+    ctx.shadowColor = 'rgba(60,160,255,0.5)';
+    ctx.shadowBlur = 8;
+    ctx.stroke();
+  });
+  ctx.shadowBlur = 0;
+
+  // Particles
+  canvas._particles.forEach(p => {
+    const breathe = Math.sin(t * p.speed + p.phase);
+    const pr = p.radius * r * (0.85 + breathe * 0.15 * pulse);
+    const wobble = amp > 0.1 ? Math.sin(t * 6 + p.phase * 3) * r * 0.03 * amp : 0;
+    const drift = Math.sin(t * 0.3 + p.phase) * r * 0.02;
+
+    const x = cx + Math.cos(p.angle + t * 0.02) * (pr + wobble + drift);
+    const y = cy + Math.sin(p.angle + t * 0.02) * (pr + wobble + drift);
+
+    const dist = pr / r;
+    const alpha = (1 - dist * 0.7) * (0.2 + pulse * 0.5) * (0.5 + gl * 0.5);
+
+    ctx.beginPath();
+    ctx.arc(x, y, p.size * (0.7 + pulse * 0.4), 0, Math.PI * 2);
+    const b = Math.round(200 + (1 - dist) * 55);
+    const g = Math.round(120 + (1 - dist) * 80);
+    ctx.fillStyle = `rgba(${Math.round(30 + (1-dist)*70)},${g},${b},${Math.max(0, Math.min(1, alpha))})`;
+    ctx.fill();
+  });
+
+  // Core glow
+  const coreSize = r * 0.06 * (0.8 + pulse * 0.4);
+  const coreGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, coreSize * 4);
+  coreGrad.addColorStop(0, `rgba(220,240,255,${0.8 * (0.5 + pulse * 0.5)})`);
+  coreGrad.addColorStop(0.3, `rgba(100,180,255,${0.3 * (0.5 + pulse * 0.5)})`);
+  coreGrad.addColorStop(1, 'rgba(20,60,120,0)');
+  ctx.beginPath();
+  ctx.arc(cx, cy, coreSize * 4, 0, Math.PI * 2);
+  ctx.fillStyle = coreGrad;
+  ctx.fill();
+
+  // Bright white center
+  ctx.beginPath();
+  ctx.arc(cx, cy, coreSize * 0.5, 0, Math.PI * 2);
+  ctx.fillStyle = `rgba(255,255,255,${0.9 * (0.5 + pulse * 0.5)})`;
+  ctx.fill();
+
+  ctx.globalCompositeOperation = 'source-over';
 }
 
-function setTimeOfDay() {
-  const h = new Date().getHours();
-  const el = document.getElementById('timeOfDay');
-  if (h < 12) el.textContent = 'morning';
-  else if (h < 17) el.textContent = 'afternoon';
-  else el.textContent = 'evening';
-}
-
-function setPatientGreeting() {
-  const name = localStorage.getItem('patientName');
-  if (name) {
-    const sub = document.querySelector('.greeting-sub');
-    if (sub) sub.textContent = `How can I help you remember, ${name}?`;
-  }
+// Animate small star canvases (splash, setup, header)
+let starAnimFrame;
+function animateStars() {
+  ['splashStar', 'setupStar', 'headerStar'].forEach(id => {
+    const c = document.getElementById(id);
+    if (c && c.closest('.screen.active')) drawStar(c, voiceAmplitude, 0.7);
+  });
+  starAnimFrame = requestAnimationFrame(animateStars);
 }
 
 // ===== NAVIGATION =====
-const TAB_SCREENS = ['home', 'family', 'identify', 'ask', 'about', 'reminders'];
-
 function showScreen(id) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
-  document.getElementById(id).classList.add('active');
-  currentScreenId = id;
+  document.getElementById(id)?.classList.add('active');
+}
 
-  // Update tab bar active states
-  document.querySelectorAll('.tab-bar .tab').forEach(t => {
-    t.classList.remove('active');
-    if (t.querySelector('span') && t.querySelector('span').textContent.toLowerCase() === id) {
-      t.classList.add('active');
-    }
+function getStarted() {
+  if (!getMode()) showScreen('setup');
+  else startChat();
+}
+
+function pickMode(mode) {
+  if (mode === 'api') {
+    document.getElementById('modeCards').style.display = 'none';
+    document.getElementById('apiSetup').style.display = '';
+  } else {
+    localStorage.setItem('gm_mode', 'local');
+    startChat();
+  }
+}
+
+function saveApiKey() {
+  const key = document.getElementById('apiKeyInput').value.trim();
+  if (!key) return;
+  localStorage.setItem('gm_apiKey', key);
+  localStorage.setItem('gm_mode', 'api');
+  startChat();
+}
+
+function startChat() {
+  showScreen('chatScreen');
+  const name = localStorage.getItem('gm_name');
+  const memories = getMemories();
+  updateStatus();
+
+  const msgContainer = document.getElementById('chatMessages');
+  if (msgContainer.children.length > 0) return;
+
+  const history = getHistory();
+  const today = new Date().toDateString();
+  const todayMsgs = history.filter(m => new Date(m.ts).toDateString() === today);
+
+  if (todayMsgs.length > 0) {
+    todayMsgs.forEach(m => {
+      const cleanText = m.text.replace(/\[SAVE:[^\]]*\]|\[UPDATE:[^\]]*\]|\[REMIND:[^\]]*\]/g, '').trim();
+      if (cleanText) addMsg(cleanText, m.role === 'user' ? 'user' : 'gemma');
+    });
+    todayMsgs.forEach(m => chatHistory.push({ role: m.role, text: m.text }));
+  } else if (!name) {
+    // First time — warm intro
+    setTimeout(() => {
+      const welcome = `Hello there! I'm Gemma, and I'm so glad you're here.\n\nI'm your companion — I'm here to help you remember the people you love, the things that matter to you, and anything else you'd like to keep close.\n\nYou can talk to me anytime. Send me photos of your family, tell me stories, or just chat. I'll remember everything for you, so you never have to worry about forgetting.\n\nTo start, I'd love to know — what's your name?`;
+      addMsg(welcome, 'gemma');
+      saveToHistory('gemma', welcome);
+      speak(welcome);
+    }, 500);
+  } else {
+    setTimeout(() => {
+      const tod = getTimeOfDay();
+      const welcome = memories.length === 0
+        ? `Good ${tod}, ${name}! It's nice to see you. Tell me about the people in your life — I'd love to remember them for you.`
+        : `Good ${tod}, ${name}! I remember ${memories.length} ${memories.length === 1 ? 'person' : 'people'} so far. What's on your mind?`;
+      addMsg(welcome, 'gemma');
+      saveToHistory('gemma', welcome);
+    }, 400);
+  }
+}
+
+function getTimeOfDay() {
+  const h = new Date().getHours();
+  if (h < 12) return 'morning';
+  if (h < 17) return 'afternoon';
+  return 'evening';
+}
+
+// ===== PERSISTENT HISTORY =====
+function getHistory() { try { return JSON.parse(localStorage.getItem('gm_history') || '[]'); } catch { return []; } }
+function saveToHistory(role, text) {
+  const h = getHistory();
+  h.push({ role, text, ts: Date.now() });
+  // Keep last 500 messages
+  if (h.length > 500) h.splice(0, h.length - 500);
+  localStorage.setItem('gm_history', JSON.stringify(h));
+}
+
+function openHistory() {
+  const panel = document.getElementById('historyPanel');
+  panel.style.display = '';
+  renderHistory();
+}
+
+function closeHistory() {
+  document.getElementById('historyPanel').style.display = 'none';
+}
+
+function renderHistory() {
+  const list = document.getElementById('historyList');
+  const history = getHistory();
+  list.innerHTML = '';
+
+  if (history.length === 0) {
+    list.innerHTML = '<p style="color:rgba(255,255,255,.3);text-align:center;padding:40px">No conversations yet.</p>';
+    return;
+  }
+
+  // Remove existing summary if any
+  const existingSummary = list.querySelector('.history-summary');
+  if (existingSummary) existingSummary.remove();
+
+  // Group by day
+  const days = {};
+  history.forEach(m => {
+    const d = new Date(m.ts);
+    const key = d.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+    if (!days[key]) days[key] = [];
+    days[key].push(m);
   });
 
-  if (id === 'reminders') loadReminders();
+  // Render newest day first
+  Object.entries(days).reverse().forEach(([day, msgs]) => {
+    const dayDiv = document.createElement('div');
+    dayDiv.className = 'history-day';
+    dayDiv.innerHTML = `<div class="history-day-label">${day}</div>`;
+
+    msgs.forEach(m => {
+      const item = document.createElement('div');
+      item.className = 'history-item';
+      const time = new Date(m.ts).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+      const roleLabel = m.role === 'user' ? localStorage.getItem('gm_name') || 'You' : 'Gemma';
+      const cleanText = m.text.replace(/<[^>]*>/g, '').replace(/\[.*?\]/g, '');
+      item.innerHTML = `
+        <div class="history-item-time">${time}</div>
+        <div class="history-item-role">${roleLabel}</div>
+        <div class="history-item-text">${cleanText}</div>
+      `;
+      dayDiv.appendChild(item);
+    });
+
+    list.appendChild(dayDiv);
+  });
 }
 
-function setupSwipeNavigation() {
-  const app = document.getElementById('app');
-  if (!app) return;
+async function summarizeHistory() {
+  const history = getHistory();
+  if (history.length === 0) return;
 
-  let startX = 0;
-  let startY = 0;
-  let startTarget = null;
-
-  app.addEventListener('touchstart', (event) => {
-    if (event.touches.length !== 1) return;
-    startX = event.touches[0].clientX;
-    startY = event.touches[0].clientY;
-    startTarget = event.target;
-  }, { passive: true });
-
-  app.addEventListener('touchend', (event) => {
-    if (!startTarget || event.changedTouches.length !== 1) return;
-    if (!TAB_SCREENS.includes(currentScreenId)) return;
-
-    const endX = event.changedTouches[0].clientX;
-    const endY = event.changedTouches[0].clientY;
-    const dx = endX - startX;
-    const dy = endY - startY;
-
-    const absX = Math.abs(dx);
-    const absY = Math.abs(dy);
-    const minSwipeDistance = 50;
-    const horizontalBias = 1.25;
-
-    if (absX < minSwipeDistance || absX < absY * horizontalBias) return;
-
-    // Avoid hijacking normal interactions.
-    if (startTarget.closest('input,textarea,button,[contenteditable="true"],.family-scroll,.chips,.suggestions,#chat')) {
-      return;
-    }
-
-    const currentIndex = TAB_SCREENS.indexOf(currentScreenId);
-    if (currentIndex === -1) return;
-
-    const isSwipeLeft = dx < 0;
-    const nextIndex = isSwipeLeft ? currentIndex + 1 : currentIndex - 1;
-    if (nextIndex < 0 || nextIndex >= TAB_SCREENS.length) return;
-
-    showScreen(TAB_SCREENS[nextIndex]);
-  }, { passive: true });
-}
-
-function setupFamilySwipeScroll() {
-  const scroller = document.getElementById('familyScroll');
-  if (!scroller) return;
-
-  let touchStartX = 0;
-  let startScrollLeft = 0;
-  let isDragging = false;
-  let moved = false;
-
-  scroller.addEventListener('touchstart', (event) => {
-    if (event.touches.length !== 1) return;
-    isDragging = true;
-    moved = false;
-    touchStartX = event.touches[0].clientX;
-    startScrollLeft = scroller.scrollLeft;
-  }, { passive: true });
-
-  scroller.addEventListener('touchmove', (event) => {
-    if (!isDragging || event.touches.length !== 1) return;
-    const dx = event.touches[0].clientX - touchStartX;
-    if (Math.abs(dx) > 4) moved = true;
-    scroller.scrollLeft = startScrollLeft - dx;
-  }, { passive: true });
-
-  scroller.addEventListener('touchend', () => {
-    isDragging = false;
-  }, { passive: true });
-
-  // If user dragged, suppress click-through on family cards at touch release.
-  scroller.addEventListener('click', (event) => {
-    if (!moved) return;
-    event.preventDefault();
-    event.stopPropagation();
-    moved = false;
-  }, true);
-}
-
-// ===== FAMILY RENDERING =====
-function getInitials(name) {
-  return name.split(' ').map(w => w[0]).join('').toUpperCase();
-}
-
-function getAvatarGradient(color) {
-  if (!color || color.length < 7) {
-    // Generate a consistent color from name hash
-    return 'linear-gradient(135deg, #4a90d9, #357abd)';
-  }
-  const r = parseInt(color.slice(1,3),16);
-  const g = parseInt(color.slice(3,5),16);
-  const b = parseInt(color.slice(5,7),16);
-  const darker = `rgb(${Math.max(0,r-40)},${Math.max(0,g-40)},${Math.max(0,b-40)})`;
-  return `linear-gradient(135deg, ${color}, ${darker})`;
-}
-
-function avatarImagePath(key) {
-  return `assets/family/${key}.png`;
-}
-
-function buildAvatarMarkup(key, person) {
-  const initials = getInitials(person.name);
-  const bg = getAvatarGradient(person.color);
-  const imgSrc = person.photoBase64
-    ? `data:image/jpeg;base64,${person.photoBase64}`
-    : avatarImagePath(key);
-  return `<div class="avatar" style="background:${bg}">
-    <img src="${imgSrc}" alt="${person.name}" loading="lazy" onload="this.nextElementSibling.style.display='none'" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex'">
-    <span class="avatar-fallback">${initials}</span>
-  </div>`;
-}
-
-function renderFamily() {
-  if (!DATA) return;
-  const people = DATA.photo_queries;
-
-  // Home scroll
-  const scroll = document.getElementById('familyScroll');
-  scroll.innerHTML = '';
-  for (const [key, p] of Object.entries(people)) {
-    const el = document.createElement('button');
-    el.className = 'family-thumb';
-    el.onclick = () => showPerson(key);
-    el.innerHTML = `
-      ${buildAvatarMarkup(key, p)}
-      <span>${p.name}</span>
-    `;
-    scroll.appendChild(el);
-  }
-
-  // Family grid
-  const grid = document.getElementById('familyGrid');
-  grid.innerHTML = '';
-  for (const [key, p] of Object.entries(people)) {
-    const el = document.createElement('button');
-    el.className = 'family-card';
-    el.onclick = () => showPerson(key);
-    el.innerHTML = `
-      ${buildAvatarMarkup(key, p)}
-      <h4>${p.name}</h4>
-      <span>${p.relationship}</span>
-    `;
-    grid.appendChild(el);
-  }
-}
-
-function showPerson(key) {
-  if (!DATA) return;
-  const p = DATA.photo_queries[key];
-  if (!p) return;
-  currentPerson = key;
-
-  document.getElementById('personHeaderName').textContent = p.name;
-  document.getElementById('personName').textContent = p.name;
-  document.getElementById('personRel').textContent = p.relationship;
-  document.getElementById('personStory').textContent = p.story;
-  document.getElementById('personAskName').textContent = p.name;
-
-  const avatar = document.getElementById('personAvatar');
-  const initials = getInitials(p.name);
-  avatar.style.background = getAvatarGradient(p.color);
-  const imgSrc = p.photoBase64
-    ? `data:image/jpeg;base64,${p.photoBase64}`
-    : avatarImagePath(key);
-  avatar.innerHTML = `
-    <img src="${imgSrc}" alt="${p.name}" onload="this.nextElementSibling.style.display='none'" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex'">
-    <span class="avatar-fallback">${initials}</span>
-  `;
-
-  const list = document.getElementById('personMemories');
-  list.innerHTML = '';
-  const captions = p.captions || (p.caption ? [p.caption] : []);
-  for (const cap of captions) {
-    const li = document.createElement('li');
-    li.textContent = cap;
-    list.appendChild(li);
-  }
-
-  showScreen('person');
-}
-
-function goAskAbout() {
-  if (!currentPerson || !DATA) return;
-  const p = DATA.photo_queries[currentPerson];
-  showScreen('ask');
-  setTimeout(() => {
-    const input = document.getElementById('qInput');
-    input.value = `Tell me about ${p.name}`;
-    sendMessage();
-  }, 350);
-}
-
-// ===== IDENTIFY (photo) =====
-const fileInput = document.getElementById('fileInput');
-const preview = document.getElementById('preview');
-const uploadPrompt = document.getElementById('uploadPrompt');
-const uploadZone = document.getElementById('uploadZone');
-const btnIdentify = document.getElementById('btnIdentify');
-
-fileInput.addEventListener('change', function() {
-  const file = this.files[0];
-  if (!file) return;
-  const reader = new FileReader();
-  reader.onload = function(e) {
-    preview.src = e.target.result;
-    preview.hidden = false;
-    uploadPrompt.hidden = true;
-    uploadZone.classList.add('has-image');
-    btnIdentify.disabled = false;
-  };
-  reader.readAsDataURL(file);
-});
-
-async function doIdentify() {
-  if (!DATA) return;
-  const loading = document.getElementById('loading');
-  loading.hidden = false;
+  const btn = document.querySelector('.history-action-btn');
+  btn.textContent = 'Summarizing...';
+  btn.disabled = true;
 
   try {
-    const imageBase64 = preview.src.split(',')[1];
-    let name, relationship, responseText;
+    const name = localStorage.getItem('gm_name') || 'the user';
+    // Take last 50 messages for summary
+    const recent = history.slice(-50);
+    const transcript = recent.map(m => {
+      const role = m.role === 'user' ? name : 'Gemma';
+      const text = m.text.replace(/<[^>]*>/g, '').replace(/\[.*?\]/g, '');
+      return `${role}: ${text}`;
+    }).join('\n');
 
-    if (GemmaPlugin && MemoryPlugin && imageBase64) {
-      const match = await MemoryPlugin.findByImage({ imageBase64 });
-      if (!match.found) {
-        responseText = "I'm not sure who this is. Would you like to tell me about them so I can remember next time?";
-        name = "Unknown";
-        relationship = "";
-      } else {
-        name = match.name;
-        relationship = match.relationship;
-        const context = `Memory:\n  Name: ${match.name}\n  Relationship: ${match.relationship}\n  Story: ${match.story}\n  Caption: ${match.caption}`;
-        const prompt = `RETRIEVED MEMORIES:\n${context}\n\nUSER'S QUESTION: Who is this person in the photo? Tell me something warm about them.\n\nRespond warmly.`;
-        const { text: reply } = await GemmaPlugin.generate({
-          systemPrompt: getSystemPrompt(), query: prompt, maxTokens: 250
-        });
-        responseText = reply;
-      }
-    } else {
-      const keys = Object.keys(DATA.photo_queries);
-      const key = keys[Math.floor(Math.random() * keys.length)];
-      const p = DATA.photo_queries[key];
-      name = p.name; relationship = p.relationship; responseText = p.response;
-    }
+    const prompt = `Here is a conversation history between ${name} and Gemma (a memory companion for someone with memory challenges):
 
-    document.getElementById('resultName').textContent = name;
-    document.getElementById('resultRel').textContent = relationship;
-    document.getElementById('resultText').textContent = responseText;
+${transcript}
 
-    document.getElementById('identifyResult').hidden = false;
-    document.getElementById('identifyActions').hidden = true;
-    speak(responseText);
-    // Auto-learn: if user uploaded a new photo of a known person, the embedding is already stored
-    // No additional extraction needed for photo identify — the match itself is the learning
+Write a brief, warm summary of what was discussed. Include:
+1. Key people mentioned and what was learned about them
+2. Any reminders or important things to remember
+3. Topics and memories that came up
+
+Keep it concise (3-5 short paragraphs). Write in a warm tone as if reminding ${name} of what they talked about. Start with "Here's what we've talked about..."`;
+
+    const summary = await aiGenerate(prompt);
+
+    // Show summary at top of history
+    const list = document.getElementById('historyList');
+    const existing = list.querySelector('.history-summary');
+    if (existing) existing.remove();
+
+    const summaryDiv = document.createElement('div');
+    summaryDiv.className = 'history-summary';
+    summaryDiv.innerHTML = `<h3>Conversation Summary</h3><p>${summary.replace(/\n/g, '<br>')}</p>`;
+    list.insertBefore(summaryDiv, list.firstChild);
   } catch (e) {
-    document.getElementById('resultText').textContent =
-      "I had trouble recognizing that photo. Please try again.";
-    console.error(e);
+    console.error('Summary failed:', e);
   } finally {
-    loading.hidden = true;
+    btn.textContent = 'Summarize all conversations';
+    btn.disabled = false;
   }
 }
 
-function resetIdentify() {
-  preview.hidden = true;
-  preview.src = '';
-  uploadPrompt.hidden = false;
-  uploadZone.classList.remove('has-image');
-  btnIdentify.disabled = true;
-  fileInput.value = '';
-  document.getElementById('identifyResult').hidden = true;
-  document.getElementById('identifyActions').hidden = false;
+// ===== CHAT =====
+let pendingPhoto = null;
+const chatHistory = [];
+
+function handleFile(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    // Resize
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      let w = img.width, h = img.height;
+      const max = 512;
+      if (w > h) { if (w > max) { h = h * max / w; w = max; } }
+      else { if (h > max) { w = w * max / h; h = max; } }
+      canvas.width = w; canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+      pendingPhoto = canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
+      document.getElementById('previewImg').src = `data:image/jpeg;base64,${pendingPhoto}`;
+      document.getElementById('photoPreview').style.display = '';
+    };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+  input.value = '';
 }
 
-// ===== ASK / CHAT =====
-const qInput = document.getElementById('qInput');
-const messagesEl = document.getElementById('messages');
-
-qInput.addEventListener('keydown', function(e) {
-  if (e.key === 'Enter') sendMessage();
-});
-
-function goAsk(text) {
-  showScreen('ask');
-  setTimeout(() => {
-    qInput.value = text;
-    sendMessage();
-  }, 350);
-}
-
-function sendFromChip(el) {
-  const text = el.textContent;
-  qInput.value = text;
-  sendMessage();
+function clearPhoto() {
+  pendingPhoto = null;
+  document.getElementById('photoPreview').style.display = 'none';
 }
 
 function sendMessage() {
-  const text = qInput.value.trim();
-  if (!text || !DATA) return;
-  qInput.value = '';
+  const input = document.getElementById('msgInput');
+  const text = input.value.trim();
+  const hasPhoto = !!pendingPhoto;
+  if (!text && !hasPhoto) return;
+  input.value = '';
 
-  const empty = document.querySelector('.chat-empty');
-  if (empty) empty.style.display = 'none';
-  const sug = document.getElementById('askChips');
-  if (sug) sug.style.display = 'none';
+  // Show user message
+  let userHtml = '';
+  if (hasPhoto) userHtml += `<img src="data:image/jpeg;base64,${pendingPhoto}">`;
+  if (text) userHtml += text;
+  addMsg(userHtml, 'user', true);
 
-  addMessage(text, 'user');
+  const sentPhoto = pendingPhoto;
+  const sentText = text;
+  clearPhoto();
+  chatHistory.push({ role: 'user', text: sentText });
+  saveToHistory('user', sentText);
 
-  const typing = document.createElement('div');
-  typing.className = 'msg-typing';
-  typing.innerHTML = '<div class="typing-dots"><span></span><span></span><span></span></div>';
-  messagesEl.appendChild(typing);
-  scrollChat();
+  // Check if responding to a pending action (location, call, message)
+  if (pendingAction && /^(yes|yeah|yep|please|ok|okay|do it|sure|send|call)/i.test(sentText.trim())) {
+    executePendingAction();
+    return;
+  }
+  if (pendingAction && /^(no|nope|nah|nevermind|cancel|don't|dont)/i.test(sentText.trim())) {
+    pendingAction = null;
+    pendingLocation = null;
+    const msg = "No problem! I'm right here whenever you need me.";
+    addMsg(msg, 'gemma');
+    speak(msg);
+    saveToHistory('gemma', msg);
+    return;
+  }
 
+  // Check if responding to location prompt
+  if (pendingLocation && /^(yes|yeah|yep|please|ok|okay|help|send|do it)/i.test(sentText.trim())) {
+    sendLocationToFamily();
+    return;
+  }
+  if (pendingLocation && /^(no|nope|nah|i'm fine|im fine|i'm ok|im ok|nevermind|cancel)/i.test(sentText.trim())) {
+    pendingLocation = null;
+    const msg = "Okay, no worries! I'm right here if you need me. You're doing great.";
+    addMsg(msg, 'gemma');
+    speak(msg);
+    saveToHistory('gemma', msg);
+    return;
+  }
+
+  // Check for call/text actions before sending to AI
   (async () => {
-    typing.remove();
+    if (!hasPhoto) {
+      const handled = await handleContactAction(sentText);
+      if (handled) return;
+    }
+
+    // Typing indicator
+    const typing = document.createElement('div');
+    typing.className = 'msg-typing';
+    typing.innerHTML = '<div class="typing-dots"><span></span><span></span><span></span></div>';
+    document.getElementById('chatMessages').appendChild(typing);
+    scrollChat();
+
     try {
-      let responseText;
-      let matches = [];
-      let found = false;
+      const name = localStorage.getItem('gm_name') || 'friend';
+      const recent = chatHistory.slice(-8).map(m => `${m.role === 'user' ? name : 'GEMMA'}: ${m.text}`).join('\n');
+      const reminders = getReminders();
+      const remCtx = reminders.length ? '\nREMINDERS:\n' + reminders.map(r => `- ${r.text}`).join('\n') : '';
 
-      if (GemmaPlugin && MemoryPlugin) {
-        const result = await MemoryPlugin.findByText({ query: text });
-        matches = result.matches || [];
-        found = result.found;
-
-        // Get profile IDs for auto-learning
-        if (found && matches.length > 0) {
-          const { profiles } = await MemoryPlugin.getAllProfiles();
-          matches.forEach(m => {
-            const profile = profiles.find(p => p.name === m.name);
-            if (profile) m.id = profile.id;
-          });
-        }
-
-        const context = found
-          ? matches.map((m, i) =>
-              `Memory ${i+1}:\n  Name: ${m.name}\n  Relationship: ${m.relationship}\n  Story: ${m.story}\n  Caption: ${m.caption}`
-            ).join('\n\n')
-          : 'No matching family memories found.';
-        const remindersCtx = await getRemindersContext();
-        const prompt = `RETRIEVED MEMORIES:\n${context}${remindersCtx}\n\nUSER'S QUESTION: ${text}\n\nRespond warmly, grounding every fact in the retrieved memories above. If there are relevant reminders for today, mention them naturally.`;
-        const { text: reply } = await GemmaPlugin.generate({
-          systemPrompt: getSystemPrompt(), query: prompt, maxTokens: 300
-        });
-        responseText = reply;
-      } else {
-        responseText = findResponse(text).text;
-      }
-      addMessage(responseText, 'bot', null);
-      speak(responseText);
-
-      // === AUTO-LEARN: extract new facts from the conversation ===
-      if (GemmaPlugin && MemoryPlugin && found && matches.length > 0) {
-        try {
-          const topMatch = matches[0];
-          const extractPrompt = `You just had this conversation:
-USER: ${text}
-GEMMA: ${responseText}
-
-The user was talking about ${topMatch.name} (${topMatch.relationship}).
-Their current known story: "${topMatch.story}"
-
-Extract ONLY genuinely NEW facts mentioned in the USER's message that are NOT already in the known story.
-If there are new facts, respond with ONLY the new facts as a brief sentence to append.
-If there are NO new facts, respond with exactly: NO_NEW_FACTS`;
-
-          const { text: extracted } = await GemmaPlugin.generate({
-            systemPrompt: 'You are a fact extractor. Be precise. Only extract genuinely new information.',
-            query: extractPrompt, maxTokens: 100
-          });
-
-          if (extracted && !extracted.includes('NO_NEW_FACTS') && extracted.trim().length > 5) {
-            await MemoryPlugin.updateStory({
-              id: topMatch.id || '',
-              appendText: extracted.trim()
-            });
-            console.log('Auto-learned:', extracted.trim());
+      // Check if user is asking about a known person — include their photo for vision
+      let personPhoto = null;
+      if (!hasPhoto) {
+        const memories = getMemories();
+        for (const p of memories) {
+          if (sentText.toLowerCase().includes(p.name.toLowerCase()) && p.photo) {
+            personPhoto = p.photo;
+            break;
           }
-        } catch (e) {
-          console.error('Auto-learn failed (non-blocking):', e);
         }
       }
+
+      const prompt = `You are Gemma, ${name}'s memory companion. Warm, brief, real. No robotic language.
+You can help ${name} call or text anyone they've told you about — just suggest it naturally if it seems like they want to reach someone.
+
+PEOPLE IN MEMORY:
+${peopleContext()}
+${remCtx}
+
+RECENT CHAT:
+${recent}
+
+${name}: ${sentText || '(sent a photo)'}
+${hasPhoto ? 'THE USER SENT A PHOTO WITH THIS MESSAGE. You MUST look at the actual image and describe what you literally see — how many people, their skin color, hair, age, clothing, expressions. Do NOT say you cannot see or describe it. You CAN see the image.' : ''}
+${personPhoto ? 'A SAVED PHOTO OF THIS PERSON IS ATTACHED. Look at the image and describe what you see when asked about their appearance. Be specific — skin tone, hair, age, clothing.' : ''}
+
+INSTRUCTIONS:
+- If the user tells you their name (e.g. "I'm Maria" or "my name is John"), respond warmly and end with: [NAME:their_name]
+- If ${name} introduces someone ("this is my daughter Sarah"), respond warmly, end with: [SAVE:name:relationship:details]
+- If ${name} adds info about someone known, end with: [UPDATE:name:new info]
+- If ${name} mentions a reminder, confirm, end with: [REMIND:text]
+- If ${name} asks what someone looks like and you have their appearance description in memory, share it naturally.
+- If ${name} sends a photo, actually describe what you see — skin tone, hair, clothing, expression. Be specific.
+- If ${name} sends a photo and it matches someone in memory, warmly say who it is, their relationship, and mention when they were last talked about. If they have a voice/video intro, offer to play it.
+- If ${name} asks "who is this?" about someone in memory, give a warm, personal answer: their name, relationship, a personal detail from their story, and when they last came up.
+- You can suggest recording a voice or video intro for family members so ${name} can hear their voice.
+- Otherwise respond naturally. 1-3 sentences max. ONLY use facts from memory or what ${name} just said.
+- Be warm, patient, and reassuring. This person may have memory challenges. Make them feel safe and loved.
+
+GEMMA:`;
+
+      const imageToSend = hasPhoto ? sentPhoto : personPhoto;
+
+      const reply = await aiGenerate(prompt, imageToSend || null);
+
+      // Parse actions
+      let clean = reply;
+
+      // Name extraction
+      const nameM = reply.match(/\[NAME:([^\]]*)\]/);
+      if (nameM) {
+        const userName = nameM[1].trim();
+        localStorage.setItem('gm_name', userName);
+        clean = clean.replace(nameM[0], '').trim();
+      }
+
+      const saveM = reply.match(/\[SAVE:([^:]*):([^:]*):([^\]]*)\]/);
+      if (saveM) {
+        let description = saveM[3].trim();
+        if (hasPhoto && sentPhoto) {
+          try {
+            const desc = await aiGenerate(
+              'Describe EVERYTHING you see in this photo. How many people? Their ages, gender, skin color, hair, clothing, facial expressions, posture. Describe the background too. Be very specific and detailed. 3-4 sentences.',
+              sentPhoto
+            );
+            description = (description ? description + '. ' : '') + 'Photo description: ' + desc.trim();
+          } catch (e) { console.warn('Vision description failed:', e); }
+        }
+        addPerson(saveM[1].trim(), saveM[2].trim(), description, hasPhoto ? sentPhoto : '');
+        clean = reply.replace(saveM[0], '').trim();
+      }
+      const updM = reply.match(/\[UPDATE:([^:]*):([^\]]*)\]/);
+      if (updM) {
+        const p = findPerson(updM[1].trim());
+        if (p) { p.story = (p.story ? p.story + '. ' + updM[2].trim() : updM[2].trim()); saveMemories(getMemories()); }
+        clean = reply.replace(updM[0], '').trim();
+      }
+      const remM = reply.match(/\[REMIND:([^\]]*)\]/);
+      if (remM) { saveReminder(remM[1].trim()); clean = reply.replace(remM[0], '').trim(); }
+
+      typing.remove();
+      chatHistory.push({ role: 'gemma', text: clean });
+            // Update lastMentioned for any person referenced
+      const allPeople = getMemories();
+      let clipPlayed = false;
+      allPeople.forEach(p => {
+        if (clean.toLowerCase().includes(p.name.toLowerCase())) {
+          p.lastMentioned = Date.now();
+          // Auto-play voice clip if identifying someone from a photo
+          if (hasPhoto && (p.voiceClip || p.videoClip) && !clipPlayed) {
+            setTimeout(() => playPersonClip(p.name), 2000);
+            clipPlayed = true;
+          }
+        }
+      });
+      saveMemories(allPeople);
+
+      saveToHistory('gemma', clean);
+      addMsg(clean, 'gemma');
+      speak(clean);
+      updateStatus();
     } catch (e) {
-      addMessage("I'm having trouble remembering right now. Please try again.", 'bot', null);
+      typing.remove();
+      addMsg("I'm having a bit of trouble right now. Can you try again?", 'gemma');
       console.error(e);
     }
   })();
 }
 
-function findResponse(query) {
-  const q = query.toLowerCase().trim();
 
-  // Direct match in text queries
-  for (const [key, val] of Object.entries(DATA.text_queries)) {
-    if (q.includes(key) || key.includes(q)) {
-      return { text: val.response, personKey: val.match || null };
-    }
-  }
-
-  // Fuzzy: search for person names
-  for (const [key, person] of Object.entries(DATA.photo_queries)) {
-    if (q.includes(person.name.toLowerCase())) {
-      return { text: person.response, personKey: key };
-    }
-  }
-
-  // Keyword matching
-  const keywords = {
-    'cookie': 'sarah', 'bak': 'sarah', 'daughter': 'sarah',
-    'dog': 'buddy', 'pet': 'buddy', 'golden': 'buddy', 'retriever': 'buddy',
-    'doctor': 'dr_chen', 'clinic': 'dr_chen', 'tuesday': 'dr_chen', 'checkup': 'dr_chen',
-    'granddaughter': 'maya', 'nana': 'maya', 'draw': 'maya',
-    'husband': 'robert', 'wedding': 'robert', 'fish': 'robert', 'rose': 'robert', 'moon river': 'robert',
-    'best friend': 'best_friend_linda', 'linda': 'best_friend_linda', 'friend': 'best_friend_linda',
-    'quilting': 'margaret', 'quilt': 'margaret',
-    'son': 'arki', 'jack': 'arki', 'birdhouse': 'arki', 'carpenter': 'arki',
-    'jazz': 'uncle_joe', 'fedora': 'uncle_joe', 'uncle': 'uncle_joe',
-    'lisa': 'lisa', 'daughter-in-law': 'lisa', 'lemon cake': 'lisa',
-    'neighbor': 'neighbor_tom', 'next door': 'neighbor_tom', 'tom': 'neighbor_tom',
-    'mailman': 'mailman_mike', 'mail carrier': 'mailman_mike', 'mail': 'mailman_mike', 'package': 'mailman_mike', 'mike': 'mailman_mike',
-  };
-
-  for (const [kw, personKey] of Object.entries(keywords)) {
-    if (q.includes(kw)) {
-      return { text: DATA.photo_queries[personKey].response, personKey };
-    }
-  }
-
-  // Default
-  return {
-    text: "I'm not quite sure about that. Could you try asking in a different way? For example, you can ask me about your family members by name, or about your daily routines.",
-    personKey: null
-  };
-}
-
-function addMessage(text, type, personKey = null) {
+function addMsg(content, role, isHtml) {
   const div = document.createElement('div');
-  div.className = `msg msg-${type}`;
-
-  if (type === 'bot' && personKey && DATA?.photo_queries?.[personKey]) {
-    const person = DATA.photo_queries[personKey];
-    const img = document.createElement('img');
-    img.className = 'msg-person-photo';
-    img.src = avatarImagePath(personKey);
-    img.alt = person.name;
-    div.appendChild(img);
+  div.className = `msg msg-${role}`;
+  if (isHtml || content.includes('<img')) {
+    div.innerHTML = content;
+  } else {
+    // Convert links
+    let processed = content.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
+    processed = processed.replace(/(https?:\/\/[^\s<]+)/g, url => {
+      if (processed.includes(`href="${url}"`)) return url;
+      return `<a href="${url}" target="_blank">${url}</a>`;
+    });
+    if (processed !== content) div.innerHTML = processed;
+    else div.textContent = content;
   }
-
-  const textNode = document.createElement('div');
-  textNode.textContent = text;
-  div.appendChild(textNode);
-
-  // Add speaker button for bot messages
-  if (type === 'bot') {
-    const speakBtn = document.createElement('button');
-    speakBtn.className = 'speak-btn';
-    speakBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M19.07 4.93a10 10 0 010 14.14M15.54 8.46a5 5 0 010 7.07"/></svg>';
-    speakBtn.onclick = () => speak(text);
-    div.appendChild(speakBtn);
-
-    // Auto-speak bot responses
-    speak(text);
-  }
-
-  messagesEl.appendChild(div);
+  document.getElementById('chatMessages').appendChild(div);
   scrollChat();
 }
 
 function scrollChat() {
-  const chat = document.getElementById('chat');
-  requestAnimationFrame(() => {
-    chat.scrollTop = chat.scrollHeight;
+  const c = document.getElementById('chatMessages');
+  requestAnimationFrame(() => c.scrollTop = c.scrollHeight);
+}
+
+function updateStatus() {
+  const n = getMemories().length;
+  const el = document.getElementById('chatStatus');
+  if (el) el.textContent = n > 0 ? `Remembering ${n} ${n === 1 ? 'person' : 'people'}` : 'Your memory companion';
+}
+
+// ===== LOCATION =====
+let pendingLocation = null;
+
+function shareLocation() {
+  if (!navigator.geolocation) { addMsg("Location isn't available on this device.", 'gemma'); return; }
+
+  // Get location silently first
+  navigator.geolocation.getCurrentPosition(pos => {
+    pendingLocation = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+    const msg = "I can see where you are. Are you feeling lost or do you need help? I can send your location to your family right away. Just say yes if you'd like me to.";
+    addMsg(msg, 'gemma');
+    speak(msg);
+    saveToHistory('gemma', msg);
+  }, () => {
+    addMsg("I couldn't find your location right now. Make sure location is turned on in your phone settings.", 'gemma');
+  }, { enableHighAccuracy: true });
+}
+
+function sendLocationToFamily() {
+  if (!pendingLocation) return;
+  const { lat, lng } = pendingLocation;
+  const url = `https://www.google.com/maps?q=${lat},${lng}`;
+  const name = localStorage.getItem('gm_name') || 'Your loved one';
+  const memories = getMemories();
+
+  // Find family contacts (anyone with a phone number in their story)
+  const familyWithPhone = memories.filter(m => {
+    const story = (m.story || '').toLowerCase();
+    return m.rel && /\d{3}.*\d{4}/.test(story);
   });
+
+  // Get all family members for the SMS
+  const familyNames = memories.filter(m => m.rel).map(m => m.name);
+  const smsBody = encodeURIComponent(`Hi, this is Gemma Remember. ${name} may need help. Their current location: ${url}`);
+
+  // Try to find phone numbers from stories
+  const phones = [];
+  memories.forEach(m => {
+    const match = (m.story || '').match(/(\+?1?\d{10,12}|\d{3}[-.\s]?\d{3}[-.\s]?\d{4})/);
+    if (match) phones.push(match[0].replace(/[-.\s]/g, ''));
+  });
+
+  if (phones.length > 0) {
+    // Open SMS with pre-filled message
+    const smsUrl = `sms:${phones.join(',')}?body=${smsBody}`;
+    window.open(smsUrl, '_blank');
+    const response = `I've opened a message to your family with your location. You're safe — just stay right where you are. Someone will come find you soon.`;
+    addMsg(response, 'gemma');
+    speak(response);
+    saveToHistory('gemma', response);
+  } else if (familyNames.length > 0) {
+    // We know family but no phone numbers
+    const response = `I know your family — ${familyNames.join(', ')} — but I don't have their phone numbers yet. Can you tell me a phone number for one of them? For now, you're safe. Stay right where you are.`;
+    addMsg(response, 'gemma');
+    speak(response);
+    saveToHistory('gemma', response);
+  } else {
+    // No family saved at all
+    const response = `I don't have any family contacts saved yet. You can tell me about your family anytime and I'll remember them. For now, stay where you are — you're safe.`;
+    addMsg(response, 'gemma');
+    speak(response);
+    saveToHistory('gemma', response);
+  }
+
+  pendingLocation = null;
+}
+
+// ===== MESSAGING & CALLING =====
+let pendingAction = null; // { type: 'sms'|'call', person, phone, message }
+
+function findPhoneForPerson(person) {
+  const story = person.story || '';
+  const match = story.match(/(\+?1?\d{10,12}|\d{3}[-.\s]?\d{3}[-.\s]?\d{4})/);
+  return match ? match[0].replace(/[-.\s]/g, '') : null;
+}
+
+function findPersonForAction(text) {
+  const memories = getMemories();
+  const tl = text.toLowerCase();
+  for (const p of memories) {
+    if (tl.includes(p.name.toLowerCase())) return p;
+    if (p.rel && tl.includes(p.rel.toLowerCase())) return p;
+  }
+  return null;
+}
+
+async function handleContactAction(sentText) {
+  const tl = sentText.toLowerCase();
+
+  // Stop recording
+  if (/\b(stop recording|done recording|finished recording)\b/i.test(tl)) {
+    return stopRecordingClip();
+  }
+
+  // Record voice/video clip for someone
+  if (/\b(record|save).*(voice|intro|clip|video|message)\b.*\b(for|from)\b/i.test(tl)) {
+    const person = findPersonForAction(sentText);
+    if (person) {
+      const isVideo = /video/i.test(tl);
+      await startRecordingClip(person.name, isVideo ? 'video' : 'voice');
+      return true;
+    }
+  }
+
+  // Play someone's clip
+  if (/\b(play|hear|listen|watch).*(voice|intro|clip|video|message)\b/i.test(tl)) {
+    const person = findPersonForAction(sentText);
+    if (person) {
+      const played = playPersonClip(person.name);
+      if (!played) {
+        const msg = `${person.name} hasn't recorded an introduction yet. A family member can record one by saying "record a voice clip for ${person.name}."`;
+        addMsg(msg, 'gemma');
+        speak(msg);
+        saveToHistory('gemma', msg);
+      }
+      return true;
+    }
+  }
+
+  const wantsCall = /\b(call|phone|ring|dial)\b/i.test(tl);
+  const wantsText = /\b(text|message|send.*message|write.*to|tell.*that|sms)\b/i.test(tl);
+
+  if (!wantsCall && !wantsText) return false;
+
+  const person = findPersonForAction(sentText);
+  if (!person) return false;
+
+  const phone = findPhoneForPerson(person);
+
+  if (wantsCall) {
+    if (!phone) {
+      const msg = `I'd love to call ${person.name} for you, but I don't have their phone number yet. Can you tell me their number?`;
+      addMsg(msg, 'gemma');
+      speak(msg);
+      saveToHistory('gemma', msg);
+      return true;
+    }
+    pendingAction = { type: 'call', person, phone };
+    const msg = `I can call ${person.name} for you right now. Would you like me to?`;
+    addMsg(msg, 'gemma');
+    speak(msg);
+    saveToHistory('gemma', msg);
+    return true;
+  }
+
+  if (wantsText) {
+    if (!phone) {
+      const msg = `I'd like to message ${person.name} for you, but I don't have their number. Can you tell me?`;
+      addMsg(msg, 'gemma');
+      speak(msg);
+      saveToHistory('gemma', msg);
+      return true;
+    }
+
+    // Generate a message using AI
+    const name = localStorage.getItem('gm_name') || 'your loved one';
+    try {
+      const prompt = `You are writing a short, warm text message from ${name} to ${person.name} (${person.rel || 'family'}).
+The user said: "${sentText}"
+Write ONLY the text message body — 1-2 sentences, warm and natural. No quotes, no explanation.`;
+      const draft = await aiGenerate(prompt);
+      pendingAction = { type: 'sms', person, phone, message: draft.trim() };
+
+      const msg = `Here's what I'd send to ${person.name}:\n\n"${draft.trim()}"\n\nShould I send it?`;
+      addMsg(msg, 'gemma');
+      speak(`Here's what I'd send to ${person.name}: ${draft.trim()}. Should I send it?`);
+      saveToHistory('gemma', msg);
+    } catch (e) {
+      const msg = `I had trouble writing that message. Can you tell me what you'd like to say to ${person.name}?`;
+      addMsg(msg, 'gemma');
+      speak(msg);
+      saveToHistory('gemma', msg);
+    }
+    return true;
+  }
+
+  return false;
+}
+
+function executePendingAction() {
+  if (!pendingAction) return;
+
+  if (pendingAction.type === 'call') {
+    window.open(`tel:${pendingAction.phone}`, '_self');
+    const msg = `Calling ${pendingAction.person.name} now...`;
+    addMsg(msg, 'gemma');
+    speak(msg);
+    saveToHistory('gemma', msg);
+  } else if (pendingAction.type === 'sms') {
+    const smsBody = encodeURIComponent(pendingAction.message);
+    window.open(`sms:${pendingAction.phone}?body=${smsBody}`, '_blank');
+    const msg = `I've opened the message to ${pendingAction.person.name}. You can review it and hit send.`;
+    addMsg(msg, 'gemma');
+    speak(msg);
+    saveToHistory('gemma', msg);
+  }
+
+  pendingAction = null;
+}
+
+// ===== CHAT MIC (speech-to-text in chat input) =====
+let chatMicActive = false;
+let chatMicRecognition = null;
+
+function toggleChatMic() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) return;
+
+  if (chatMicActive) {
+    chatMicRecognition?.stop();
+    chatMicActive = false;
+    document.getElementById('chatMicBtn')?.classList.remove('mic-active');
+    return;
+  }
+
+  chatMicRecognition = new SR();
+  chatMicRecognition.continuous = false;
+  chatMicRecognition.interimResults = true;
+  chatMicRecognition.lang = 'en-US';
+
+  chatMicRecognition.onresult = e => {
+    document.getElementById('msgInput').value = Array.from(e.results).map(r => r[0].transcript).join('');
+  };
+  chatMicRecognition.onend = () => {
+    chatMicActive = false;
+    document.getElementById('chatMicBtn')?.classList.remove('mic-active');
+    const input = document.getElementById('msgInput');
+    if (input?.value.trim()) sendMessage();
+  };
+  chatMicRecognition.onerror = () => {
+    chatMicActive = false;
+    document.getElementById('chatMicBtn')?.classList.remove('mic-active');
+  };
+
+  chatMicActive = true;
+  document.getElementById('chatMicBtn')?.classList.add('mic-active');
+  document.getElementById('msgInput').value = '';
+  chatMicRecognition.start();
+}
+
+// ===== VOICE MODE =====
+let voiceAmplitude = 0;
+let sttRecognition = null;
+let voiceActive = false;
+
+function setVizState(state) {
+  const frame = document.getElementById('vizFrame');
+  if (frame?.contentWindow) frame.contentWindow.postMessage({ type: 'gemma_state', state }, '*');
+}
+
+function enterVoiceMode() {
+  showScreen('voiceMode');
+  voiceActive = true;
+  setVizState('listening');
+  startListening();
+}
+
+function exitVoiceMode() {
+  voiceActive = false;
+  stopListening();
+  showScreen('chatScreen');
+}
+
+function startListening() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) { document.getElementById('voiceStatus').textContent = 'Speech not supported'; return; }
+
+  sttRecognition = new SR();
+  sttRecognition.continuous = false;
+  sttRecognition.interimResults = true;
+  sttRecognition.lang = 'en-US';
+
+  sttRecognition.onresult = e => {
+    const transcript = Array.from(e.results).map(r => r[0].transcript).join('');
+    document.getElementById('voicePartial').textContent = transcript;
+  };
+
+  sttRecognition.onend = () => {
+    voiceAmplitude = 0;
+    const text = document.getElementById('voicePartial').textContent.trim();
+    if (text && voiceActive) {
+      document.getElementById('voiceStatus').textContent = 'Thinking...';
+      document.getElementById('voicePartial').textContent = '';
+      setVizState('thinking');
+      chatHistory.push({ role: 'user', text });
+      saveToHistory('user', text);
+      addMsg(text, 'user');
+
+      (async () => {
+        try {
+          const name = localStorage.getItem('gm_name') || 'friend';
+          const prompt = `You are Gemma, ${name}'s companion. Be warm, brief.
+
+PEOPLE: ${peopleContext()}
+${name}: ${text}
+
+Respond in 1-2 sentences. Natural, caring.
+GEMMA:`;
+          const reply = await aiGenerate(prompt);
+          let clean = reply.replace(/\[SAVE:[^\]]*\]|\[UPDATE:[^\]]*\]|\[REMIND:[^\]]*\]/g, '').trim();
+          // Parse save/update/remind same as chat
+          const saveM = reply.match(/\[SAVE:([^:]*):([^:]*):([^\]]*)\]/);
+          if (saveM) addPerson(saveM[1].trim(), saveM[2].trim(), saveM[3].trim());
+          const remM = reply.match(/\[REMIND:([^\]]*)\]/);
+          if (remM) saveReminder(remM[1].trim());
+
+          chatHistory.push({ role: 'gemma', text: clean });
+          saveToHistory('gemma', clean);
+          addMsg(clean, 'gemma');
+          document.getElementById('voiceStatus').textContent = 'Speaking...';
+          setVizState('speaking');
+          voiceAmplitude = 0.7;
+
+          speak(clean, () => {
+            voiceAmplitude = 0;
+            if (voiceActive) {
+              document.getElementById('voiceStatus').textContent = 'Listening...';
+              setVizState('listening');
+              startListening();
+            }
+          });
+          updateStatus();
+        } catch (e) {
+          console.error(e);
+          document.getElementById('voiceStatus').textContent = 'Error. Trying again...';
+          if (voiceActive) setTimeout(startListening, 1500);
+        }
+      })();
+    } else if (voiceActive) {
+      // No speech detected, restart
+      startListening();
+    }
+  };
+
+  sttRecognition.onaudiostart = () => { voiceAmplitude = 0.3; setVizState('listening'); };
+  sttRecognition.onsoundstart = () => { voiceAmplitude = 0.6; };
+  sttRecognition.onsoundend = () => { voiceAmplitude = 0.1; };
+  sttRecognition.onerror = e => {
+    voiceAmplitude = 0;
+    if (voiceActive && (e.error === 'no-speech' || e.error === 'aborted')) {
+      startListening();
+    } else {
+      document.getElementById('voiceStatus').textContent = `Error: ${e.error}`;
+    }
+  };
+
+  document.getElementById('voiceStatus').textContent = 'Listening...';
+  sttRecognition.start();
+}
+
+function stopListening() {
+  voiceAmplitude = 0;
+  try { sttRecognition?.stop(); } catch {}
+  try { speechSynthesis?.cancel(); } catch {}
 }
 
 // ===== INIT =====
-setupSwipeNavigation();
-setupFamilySwipeScroll();
+document.getElementById('msgInput')?.addEventListener('keydown', e => { if (e.key === 'Enter') sendMessage(); });
 
-window.addEventListener('DOMContentLoaded', async () => {
-  initTTS();
-  initSTT();
-  if (GemmaPlugin) {
-    try {
-      const { ready, engineAvailable, device } = await GemmaPlugin.isModelReady();
-      if (!engineAvailable) {
-        document.body.innerHTML = `
-          <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;padding:2rem;text-align:center;font-family:sans-serif;background:#1a1a2e;color:#fff;">
-            <h1 style="font-size:2rem;margin-bottom:1rem;">⚠️ Device Not Supported</h1>
-            <p style="font-size:1.1rem;color:#ccc;max-width:400px;">Gemma Remember requires a physical Android device with an ARM processor for on-device AI.</p>
-            <p style="font-size:0.9rem;color:#888;margin-top:1rem;">Detected: ${device || 'Unknown'}</p>
-            <p style="font-size:0.9rem;color:#888;margin-top:0.5rem;">Emulators and x86 devices are not supported.</p>
-          </div>`;
-        return;
-      }
-      if (!ready) {
-        showScreen('modelSetup');
-        return;
-      }
-    } catch (e) {
-      console.error('GemmaPlugin check failed:', e);
-    }
-  }
-  if (!localStorage.getItem('patientName')) {
-    showScreen('setupWizard');
-  } else {
-    await loadData();
-  }
+window.addEventListener('DOMContentLoaded', () => {
+  animateStars();
+  if (getMode()) startChat();
 });
-
-// ===== SPEECH-TO-TEXT =====
-let sttActive = false;
-let recognition = null;
-
-function initSTT() {
-  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SpeechRecognition) {
-    const btn = document.getElementById('micBtn');
-    if (btn) btn.style.display = 'none';
-    return;
-  }
-  recognition = new SpeechRecognition();
-  recognition.continuous = false;
-  recognition.interimResults = true;
-  recognition.lang = 'en-US';
-
-  recognition.onresult = (e) => {
-    const transcript = Array.from(e.results)
-      .map(r => r[0].transcript).join('');
-    document.getElementById('qInput').value = transcript;
-  };
-  recognition.onend = () => {
-    sttActive = false;
-    const btn = document.getElementById('micBtn');
-    if (btn) btn.classList.remove('listening');
-    // Auto-send if we got text
-    const input = document.getElementById('qInput');
-    if (input && input.value.trim()) {
-      sendMessage();
-    }
-  };
-  recognition.onerror = (e) => {
-    console.error('STT error:', e.error);
-    sttActive = false;
-    const btn = document.getElementById('micBtn');
-    if (btn) btn.classList.remove('listening');
-  };
-}
-
-function toggleSTT() {
-  if (!recognition) { initSTT(); if (!recognition) return; }
-  if (sttActive) {
-    recognition.stop();
-  } else {
-    sttActive = true;
-    const btn = document.getElementById('micBtn');
-    if (btn) btn.classList.add('listening');
-    document.getElementById('qInput').value = '';
-    recognition.start();
-  }
-}
-
-// ===== SETUP WIZARD =====
-let wizPhotos = []; // base64 strings from file picker
-
-function wizardNext1() {
-  const name = document.getElementById('patientNameInput').value.trim();
-  if (!name) { document.getElementById('patientNameInput').focus(); return; }
-  localStorage.setItem('patientName', name);
-  document.getElementById('wizPatientName').textContent = name;
-  // Update home greeting
-  const greetSub = document.querySelector('.greeting-sub');
-  if (greetSub) greetSub.textContent = `How can I help you remember, ${name}?`;
-  wizShowStep('wizStep2');
-}
-
-function wizShowStep(stepId) {
-  document.querySelectorAll('.wiz-step').forEach(s => s.classList.remove('active'));
-  document.getElementById(stepId).classList.add('active');
-}
-
-function wizShowAddPerson() {
-  // Reset form
-  document.getElementById('personNameInput').value = '';
-  document.getElementById('personRelInput').value = '';
-  document.getElementById('personStoryInput').value = '';
-  document.getElementById('personPhotoInput').value = '';
-  document.getElementById('photoPreviewRow').innerHTML = '';
-  document.getElementById('photoLabel').textContent = 'Choose photo(s)';
-  wizPhotos = [];
-  wizShowStep('wizStep2b');
-}
-
-function wizBackToPeople() {
-  wizShowStep('wizStep2');
-}
-
-// Resize image via canvas to prevent oversized base64
-function resizeImage(file, maxSize = 512) {
-  return new Promise((resolve) => {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const img = new Image();
-      img.onload = () => {
-        const canvas = document.createElement('canvas');
-        let w = img.width, h = img.height;
-        if (w > h) { if (w > maxSize) { h = h * maxSize / w; w = maxSize; } }
-        else { if (h > maxSize) { w = w * maxSize / h; h = maxSize; } }
-        canvas.width = w; canvas.height = h;
-        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-        const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
-        resolve(dataUrl);
-      };
-      img.onerror = () => resolve(e.target.result); // fallback to raw
-      img.src = e.target.result;
-    };
-    reader.readAsDataURL(file);
-  });
-}
-
-// Photo picker handler
-document.addEventListener('DOMContentLoaded', () => {
-  const photoInput = document.getElementById('personPhotoInput');
-  if (photoInput) {
-    photoInput.addEventListener('change', async function() {
-      const files = Array.from(this.files);
-      document.getElementById('photoLabel').textContent = `${files.length} photo(s) selected`;
-      const row = document.getElementById('photoPreviewRow');
-      row.innerHTML = '';
-      wizPhotos = [];
-      for (const file of files) {
-        const dataUrl = await resizeImage(file, 512);
-        wizPhotos.push(dataUrl.split(',')[1]); // base64 without prefix
-        const img = document.createElement('img');
-        img.src = dataUrl;
-        row.appendChild(img);
-      }
-    });
-  }
-});
-
-async function wizSavePerson() {
-  const name = document.getElementById('personNameInput').value.trim();
-  const rel = document.getElementById('personRelInput').value;
-  const story = document.getElementById('personStoryInput').value.trim();
-
-  if (!name) { document.getElementById('personNameInput').focus(); return; }
-
-  const btn = document.querySelector('#wizStep2b .btn-primary');
-  btn.disabled = true; btn.textContent = 'Saving...';
-
-  try {
-    if (MemoryPlugin) {
-      // Save with first photo (if any)
-      await MemoryPlugin.addProfile({
-        name, relationship: rel, story,
-        photoBase64: wizPhotos[0] || '', caption: ''
-      });
-      // If multiple photos, add extra embeddings (future enhancement)
-    }
-
-    // Add to people list UI
-    const list = document.getElementById('wizPeopleList');
-    const card = document.createElement('div');
-    card.className = 'wiz-person-card';
-    const imgSrc = wizPhotos[0] ? `data:image/jpeg;base64,${wizPhotos[0]}` : '';
-    const savedName = name, savedRel = rel, savedStory = story, savedPhotos = [...wizPhotos];
-    card.innerHTML = `
-      ${imgSrc ? `<img src="${imgSrc}" alt="${name}">` : '<div class="wpc-avatar">' + name.charAt(0).toUpperCase() + '</div>'}
-      <div class="wpc-info">
-        <div class="wpc-name">${name}</div>
-        <div class="wpc-rel">${rel}</div>
-      </div>
-      <span class="wpc-edit">Edit</span>
-    `;
-    card.addEventListener('click', () => wizEditPerson(savedName, savedRel, savedStory, savedPhotos));
-    list.appendChild(card);
-
-    // Show "All done" button
-    document.getElementById('wizDoneBtn').style.display = '';
-
-    wizBackToPeople();
-  } catch (e) {
-    console.error('Failed to save person:', e);
-    alert('Failed to save. Please try again.');
-  } finally {
-    btn.disabled = false; btn.textContent = 'Save';
-  }
-}
-
-function wizEditPerson(name, rel, story, photos) {
-  document.getElementById('personNameInput').value = name;
-  document.getElementById('personRelInput').value = rel;
-  document.getElementById('personStoryInput').value = story;
-  const row = document.getElementById('photoPreviewRow');
-  row.innerHTML = '';
-  wizPhotos = [...photos];
-  photos.forEach(b64 => {
-    const img = document.createElement('img');
-    img.src = `data:image/jpeg;base64,${b64}`;
-    row.appendChild(img);
-  });
-  document.getElementById('photoLabel').textContent = photos.length ? `${photos.length} photo(s)` : 'Choose photo(s)';
-  wizShowStep('wizStep2b');
-}
-
-async function wizardDone() {
-  try {
-    await loadData();
-  } catch (e) {
-    console.error('loadData failed in wizardDone:', e);
-  }
-  showScreen('home');
-}
-
-// ===== REMINDERS =====
-const CATEGORY_ICONS = { medication: '\u{1F48A}', appointment: '\u{1F4C5}', birthday: '\u{1F382}', other: '\u{1F4CC}' };
-
-async function loadReminders() {
-  if (!MemoryPlugin) return;
-  const { reminders } = await MemoryPlugin.getReminders();
-  const list = document.getElementById('remindersList');
-  if (!list) return;
-  list.innerHTML = '';
-  if (reminders.length === 0) {
-    list.innerHTML = '<p style="text-align:center;color:#999;padding:20px">No reminders yet. Add one below.</p>';
-    return;
-  }
-  reminders.forEach(r => {
-    const card = document.createElement('div');
-    card.className = 'reminder-card';
-    const cat = r.category || 'other';
-    const icon = CATEGORY_ICONS[cat] || CATEGORY_ICONS.other;
-    const meta = [r.recurring ? r.recurring : '', r.date || '', r.time || ''].filter(Boolean).join(' \u00B7 ');
-    card.innerHTML = `
-      <div class="rc-icon ${cat}">${icon}</div>
-      <div class="rc-info">
-        <div class="rc-text">${r.text}</div>
-        <div class="rc-meta">${meta || 'No schedule set'}</div>
-      </div>
-      <button class="rc-delete" onclick="deleteReminder('${r.id}')" title="Delete">\u00D7</button>
-    `;
-    list.appendChild(card);
-  });
-}
-
-async function addReminder() {
-  const text = document.getElementById('reminderText').value.trim();
-  if (!text) { document.getElementById('reminderText').focus(); return; }
-
-  const date = document.getElementById('reminderDate').value || null;
-  const time = document.getElementById('reminderTime').value || null;
-  const recurring = document.getElementById('reminderRecurring').value || null;
-  const category = document.getElementById('reminderCategory').value || 'other';
-
-  if (MemoryPlugin) {
-    await MemoryPlugin.addReminder({ text, date, time, recurring, category });
-  }
-
-  // Clear form
-  document.getElementById('reminderText').value = '';
-  document.getElementById('reminderDate').value = '';
-  document.getElementById('reminderTime').value = '';
-  document.getElementById('reminderRecurring').value = '';
-
-  await loadReminders();
-}
-
-async function deleteReminder(id) {
-  if (MemoryPlugin) {
-    await MemoryPlugin.deleteReminder({ id });
-  }
-  await loadReminders();
-}
-
-// Build reminders context for Gemma prompts
-async function getRemindersContext() {
-  if (!MemoryPlugin) return '';
-  try {
-    const { reminders } = await MemoryPlugin.getReminders();
-    if (!reminders || reminders.length === 0) return '';
-    const today = new Date().toISOString().split('T')[0];
-    const lines = reminders.map(r => {
-      let line = `- ${r.text}`;
-      if (r.category) line += ` (${r.category})`;
-      if (r.recurring) line += ` [${r.recurring}]`;
-      if (r.date) line += ` [${r.date}]`;
-      if (r.time) line += ` at ${r.time}`;
-      return line;
-    });
-    return `\n\nTODAY'S DATE: ${today}\nREMINDERS:\n${lines.join('\n')}`;
-  } catch (e) {
-    return '';
-  }
-}
-
-// ===== MODEL SETUP =====
-async function startModelDownload() {
-  const btn = document.getElementById('startDownloadBtn');
-  const progressArea = document.getElementById('setupProgressArea');
-  const bar = document.getElementById('modelProgressBar');
-  const label = document.getElementById('modelProgressLabel');
-
-  btn.disabled = true;
-  btn.textContent = 'Downloading…';
-  progressArea.hidden = false;
-
-  if (!GemmaPlugin) {
-    label.textContent = 'Browser mode — no download needed.';
-    setTimeout(async () => {
-      if (!localStorage.getItem('patientName')) {
-        showScreen('setupWizard');
-      } else {
-        await loadData();
-        showScreen('home');
-      }
-    }, 1200);
-    return;
-  }
-
-  GemmaPlugin.addListener('downloadProgress', ({ percent, downloaded, total }) => {
-    const pct = percent >= 0 ? percent : Math.round((downloaded / total) * 100);
-    bar.style.width = pct + '%';
-    const mb = Math.round(downloaded / 1024 / 1024);
-    const totalMb = Math.round(total / 1024 / 1024);
-    label.textContent = `${mb} MB / ${totalMb} MB (${pct}%)`;
-  });
-
-  try {
-    await GemmaPlugin.downloadModel({
-      url: 'https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm'
-    });
-    bar.style.width = '100%';
-    label.textContent = 'Download complete! Setting up…';
-    // Check if wizard has been completed
-    if (!localStorage.getItem('patientName')) {
-      showScreen('setupWizard');
-    } else {
-      await loadData();
-      showScreen('home');
-    }
-  } catch (e) {
-    label.textContent = 'Download failed. Check your connection and try again.';
-    btn.disabled = false;
-    btn.textContent = 'Retry';
-    console.error(e);
-  }
-}
