@@ -148,8 +148,23 @@ function getMode() { return localStorage.getItem('gm_mode') || ''; }
 const MODEL = 'gemma-4-26b-a4b-it';
 
 async function aiGenerate(prompt, imageB64) {
+  const mode = getMode();
+  const GemmaPlugin = window.Capacitor?.Plugins?.GemmaPlugin;
+
+  // Local mode: use on-device Gemma via Capacitor plugin
+  if (mode === 'local' && GemmaPlugin) {
+    try {
+      const { text } = await GemmaPlugin.generate({ systemPrompt: '', query: prompt });
+      return text;
+    } catch (e) {
+      console.warn('Local Gemma failed, falling back to API:', e);
+      // Fall through to API
+    }
+  }
+
+  // API mode (or local fallback)
   const key = getApiKey();
-  if (!key) throw new Error('No API key');
+  if (!key) throw new Error('No AI available');
   const parts = [{ text: prompt }];
   if (imageB64) parts.push({ inlineData: { mimeType: 'image/jpeg', data: imageB64 } });
   const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${key}`, {
@@ -378,9 +393,51 @@ function pickMode(mode) {
   if (mode === 'api') {
     document.getElementById('modeCards').style.display = 'none';
     document.getElementById('apiSetup').style.display = '';
-  } else {
-    localStorage.setItem('gm_mode', 'local');
-    startChat();
+    return;
+  }
+
+  // Local mode — only works in the APK with GemmaPlugin
+  const GemmaPlugin = window.Capacitor?.Plugins?.GemmaPlugin;
+  if (!GemmaPlugin) {
+    alert("On-Device mode only works in the Android app. Please use Cloud mode in the browser, or install the APK to download Gemma 4 to your phone.");
+    return;
+  }
+
+  // In APK: kick off the model download
+  localStorage.setItem('gm_mode', 'local');
+  startLocalDownload(GemmaPlugin);
+}
+
+async function startLocalDownload(GemmaPlugin) {
+  // Replace mode cards with a download progress UI
+  document.getElementById('modeCards').innerHTML = `
+    <div style="padding:24px;background:#fff;border:2px solid #d4e0f7;border-radius:18px;text-align:center;">
+      <h3 style="color:#0d3268;font-size:1.1rem;margin-bottom:12px;">Downloading Gemma 4...</h3>
+      <p style="color:#5088c3;font-size:.9rem;margin-bottom:16px;">~2.6 GB. Stay on Wi-Fi. This only happens once.</p>
+      <div style="width:100%;height:12px;background:#eef3ff;border-radius:6px;overflow:hidden;">
+        <div id="dlBar" style="width:0%;height:100%;background:#4285F4;transition:width .3s;"></div>
+      </div>
+      <p id="dlLabel" style="margin-top:10px;color:#5088c3;font-size:.85rem;">Starting...</p>
+    </div>
+  `;
+
+  try {
+    const { ready } = await GemmaPlugin.isModelReady();
+    if (!ready) {
+      GemmaPlugin.addListener('downloadProgress', ({ percent, downloaded, total }) => {
+        const pct = percent >= 0 ? percent : Math.round((downloaded / total) * 100);
+        document.getElementById('dlBar').style.width = pct + '%';
+        const mb = Math.round(downloaded / 1024 / 1024);
+        const totalMb = Math.round(total / 1024 / 1024);
+        document.getElementById('dlLabel').textContent = `${mb} MB / ${totalMb} MB (${pct}%)`;
+      });
+      await GemmaPlugin.downloadModel({});
+    }
+    document.getElementById('dlLabel').textContent = 'Ready!';
+    setTimeout(() => startChat(), 800);
+  } catch (e) {
+    document.getElementById('dlLabel').textContent = 'Download failed. Tap a mode above to retry.';
+    console.error(e);
   }
 }
 
