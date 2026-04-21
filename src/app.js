@@ -1050,10 +1050,10 @@ function setVizState(state) {
 }
 
 function enterVoiceMode() {
-  showScreen('voiceMode');
   voiceActive = true;
+  showScreen('voiceMode');
   setVizState('listening');
-  startListening();
+  try { startListening(); } catch(e) { console.error('STT failed:', e); }
 }
 
 function exitVoiceMode() {
