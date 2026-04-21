@@ -60,16 +60,21 @@ a{color:#4285F4}
 .photo-preview{padding:8px 16px;background:#fff;display:flex;align-items:center;gap:8px}
 .photo-preview img{width:64px;height:64px;object-fit:cover;border-radius:10px;border:1px solid #e4eaf2}
 .photo-remove{width:24px;height:24px;border-radius:50%;background:#e53935;border:none;color:#fff;font-size:14px;cursor:pointer;display:flex;align-items:center;justify-content:center}
-.chat-input-bar{display:flex;align-items:center;gap:4px;padding:8px 12px;background:#fff;border-top:1px solid #e8edf4;flex-shrink:0}
-.input-icon{width:44px;height:44px;border:none;background:none;cursor:pointer;display:flex;align-items:center;justify-content:center;border-radius:50%;color:#8b95a8;flex-shrink:0;transition:all .15s}
-.input-icon:hover{color:#4285F4;background:#eef3ff}
-.mic-chat-btn{color:#4285F4;background:#eef3ff;border:2px solid #d4e0f7}
-.mic-chat-btn.mic-active{color:#fff;background:#e53935;border-color:#e53935;animation:pulse-mic 1s infinite}
-@keyframes pulse-mic{0%,100%{box-shadow:0 0 0 0 rgba(229,57,53,.3)}50%{box-shadow:0 0 0 8px rgba(229,57,53,0)}}
-.chat-input-field{flex:1;background:#f4f7fc;border:1.5px solid #e4eaf2;border-radius:24px;padding:14px 20px;font-size:1.05rem;color:#1a2940;outline:none;font-family:inherit;transition:border-color .2s;min-width:0}
-.chat-input-field:focus{border-color:#4285F4}
-.chat-input-field::placeholder{color:#b0b8c8}
-.send-btn{width:48px;height:48px;border-radius:50%;background:#4285F4;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:transform .1s}
+.chat-input-bar{display:flex;align-items:center;gap:8px;padding:14px 14px max(env(safe-area-inset-bottom,14px),14px);background:#fff;border-top:1px solid #e8edf4;flex-shrink:0;flex-wrap:wrap}
+.chat-input-row{display:flex;align-items:center;gap:8px;width:100%}
+.chat-input-tools{display:flex;gap:8px;width:100%;justify-content:space-around;padding-bottom:6px}
+.input-icon{width:56px;height:56px;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;border-radius:50%;color:#4285F4;background:#eef3ff;flex-shrink:0;transition:all .15s;border:2px solid #d4e0f7}
+.input-icon svg{width:26px;height:26px}
+.input-icon:hover{background:#dce8ff;transform:scale(1.05)}
+.input-icon:active{transform:scale(.95)}
+.mic-chat-btn{color:#fff!important;background:#4285F4!important;border-color:#4285F4!important}
+.mic-chat-btn.mic-active{background:#e53935!important;border-color:#e53935!important;animation:pulse-mic 1s infinite}
+@keyframes pulse-mic{0%,100%{box-shadow:0 0 0 0 rgba(229,57,53,.4)}50%{box-shadow:0 0 0 12px rgba(229,57,53,0)}}
+.chat-input-field{flex:1;background:#f4f7fc;border:2px solid #d4e0f7;border-radius:28px;padding:16px 22px;font-size:1.1rem;color:#1a2940;outline:none;font-family:inherit;transition:border-color .2s;min-width:0;min-height:56px}
+.chat-input-field:focus{border-color:#4285F4;background:#fff}
+.chat-input-field::placeholder{color:#8b95a8}
+.send-btn{width:56px;height:56px;border-radius:50%;background:#4285F4;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:transform .1s;box-shadow:0 4px 12px rgba(66,133,244,.35)}
+.send-btn svg{width:26px;height:26px}
 .send-btn:active{transform:scale(.9)}
 
 /* ===== VOICE MODE ===== */
