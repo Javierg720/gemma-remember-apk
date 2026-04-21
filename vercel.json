@@ -1,0 +1,9 @@
+{
+  "outputDirectory": "src",
+  "installCommand": "echo skip",
+  "buildCommand": "echo skip",
+  "framework": null,
+  "rewrites": [
+    { "source": "/tts", "destination": "/api/tts" }
+  ]
+}

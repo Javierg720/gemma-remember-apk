@@ -1,0 +1,6 @@
+android/
+node_modules/
+docs/
+gemma-remember-release.jks
+*.apk
+src/server.py

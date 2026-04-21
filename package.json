@@ -18,5 +18,8 @@
     "@capacitor/android": "^8.3.0",
     "@capacitor/cli": "^8.3.0",
     "@capacitor/core": "^8.3.0"
+  },
+  "devDependencies": {
+    "vercel": "^51.8.0"
   }
 }
