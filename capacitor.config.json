@@ -2,6 +2,11 @@
   "appId": "com.gemmaremember.app",
   "appName": "Gemma Remember",
   "webDir": "src",
+  "server": {
+    "url": "https://gemma-remember-apk.vercel.app",
+    "androidScheme": "https",
+    "allowNavigation": ["gemma-remember-apk.vercel.app", "*.vercel.app"]
+  },
   "android": {
     "allowMixedContent": false,
     "minWebViewVersion": 60
