@@ -663,41 +663,35 @@ function sendMessage() {
   chatHistory.push({ role: 'user', text: sentText });
   saveToHistory('user', sentText);
 
-  // Check if responding to a pending action (location, call, message)
-  if (pendingAction && /^(yes|yeah|yep|please|ok|okay|do it|sure|send|call)/i.test(sentText.trim())) {
-    executePendingAction();
-    return;
-  }
-  if (pendingAction && /^(no|nope|nah|nevermind|cancel|don't|dont)/i.test(sentText.trim())) {
-    pendingAction = null;
-    pendingLocation = null;
-    const msg = "No problem! I'm right here whenever you need me.";
-    addMsg(msg, 'gemma');
-    speak(msg);
-    saveToHistory('gemma', msg);
-    return;
-  }
-
-  // Check if responding to location prompt
-  if (pendingLocation && /^(yes|yeah|yep|please|ok|okay|help|send|do it)/i.test(sentText.trim())) {
-    sendLocationToFamily();
+  // SOS confirmation — user said yes to sending location
+  if (pendingLocation && /^(yes|yeah|yep|please|ok|okay|help|send|do it|sure)/i.test(sentText.trim())) {
+    sendLocationToEmergencyContact();
     return;
   }
   if (pendingLocation && /^(no|nope|nah|i'm fine|im fine|i'm ok|im ok|nevermind|cancel)/i.test(sentText.trim())) {
     pendingLocation = null;
-    const msg = "Okay, no worries! I'm right here if you need me. You're doing great.";
+    const msg = "Okay, I'm right here with you. You're safe.";
     addMsg(msg, 'gemma');
     speak(msg);
     saveToHistory('gemma', msg);
     return;
   }
 
-  // Check for call/text actions before sending to AI
+  // Detect "I'm lost" in the message — skip AI, ask one confirmation question
+  if (!pendingLocation && /\b(i('m| am) lost|i don'?t know where|can'?t find (my way|home|where)|help me (get )?home|where am i)\b/i.test(sentText)) {
+    const sos = getSosContact();
+    const sosName = sos ? sos.name : 'your emergency contact';
+    navigator.geolocation?.getCurrentPosition(pos => {
+      pendingLocation = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+    }, null, { enableHighAccuracy: true, timeout: 8000 });
+    const msg = `I'm right here with you. Are you lost? Should I send your location to ${sosName}?`;
+    addMsg(msg, 'gemma');
+    speak(msg);
+    saveToHistory('gemma', msg);
+    return;
+  }
+
   (async () => {
-    if (!hasPhoto) {
-      const handled = await handleContactAction(sentText);
-      if (handled) return;
-    }
 
     // Typing indicator
     const typing = document.createElement('div');
@@ -725,11 +719,19 @@ function sendMessage() {
       }
 
       const prompt = `You are Gemma, ${name}'s memory companion. Warm, brief, real. No robotic language.
-You can help ${name} call or text anyone they've told you about — just suggest it naturally if it seems like they want to reach someone.
+
+CRITICAL HONESTY RULES — NEVER VIOLATE:
+- You are a chat app. You CANNOT send texts, make calls, or contact anyone on your own.
+- The ONLY way a message or call actually happens is if you emit an action tag (see below) that the app executes.
+- NEVER say "I sent it", "I'm sending", "I just texted", "I called", "I'm calling", "I told them", "I let them know", "Help is on the way", or anything that implies you contacted someone. These are lies — real harm for a dementia patient who may be lost or in distress.
+- If ${name} asks you to text or call someone you have NO phone number for, TELL THE TRUTH: "I don't have their number yet — can you tell me it, or would you like to call 911?" Never pretend.
+- If ${name} seems lost, distressed, or in an emergency: tell them clearly to call 911, and offer to open the phone dialer. Do not pretend help is already coming.
 
 ORIENTATION: Naturally weave in the current day, time, and season when it feels right — not every message, but when greeting or when ${name} seems uncertain. Example: "It's Wednesday morning, a nice spring day." Never be condescending about it.
 
 REPEAT QUESTIONS: ${name} may ask the same question many times. NEVER say "as I mentioned" or "like I said" or "I already told you." Answer every time with the same warmth and patience as if it's the first time. This is not forgetfulness — this is how their mind works, and they deserve full respect every time.
+
+EMERGENCY CONTACT: ${(() => { const s = getSosContact(); return s ? `${s.name} (${s.phone})` : 'not set yet'; })()}
 
 PEOPLE IN MEMORY:
 ${peopleContext()}
@@ -747,6 +749,9 @@ INSTRUCTIONS:
 - If ${name} introduces someone ("this is my daughter Sarah"), respond warmly, end with: [SAVE:name:relationship:details]
 - If ${name} adds info about someone known, end with: [UPDATE:name:new info]
 - If ${name} mentions a reminder, confirm, end with: [REMIND:text]
+- If ${name} mentions an emergency contact ("my emergency contact is Maria at 555-1234"), save it and end with: [SOS:name:phone]
+- You CANNOT text or call anyone. The ONLY emergency action is the location button (the pin icon) or saying "I'm lost" — that opens the SMS composer with ${name}'s location pre-filled for their emergency contact. Never claim otherwise.
+- If ${name} seems in distress or lost, gently remind them to tap the location pin or say "I'm lost".
 - If ${name} asks what someone looks like and you have their appearance description in memory, share it naturally.
 - If ${name} sends a photo, actually describe what you see — skin tone, hair, clothing, expression. Be specific.
 - If ${name} sends a photo and it matches someone in memory, warmly say who it is, their relationship, and mention when they were last talked about. If they have a voice/video intro, offer to play it.
@@ -795,6 +800,12 @@ GEMMA:`;
       }
       const remM = reply.match(/\[REMIND:([^\]]*)\]/);
       if (remM) { saveReminder(remM[1].trim()); clean = reply.replace(remM[0], '').trim(); }
+
+      const sosM = reply.match(/\[SOS:([^:]*):([^\]]*)\]/);
+      if (sosM) {
+        saveSosContact(sosM[1].trim(), sosM[2].trim().replace(/[-.\s]/g, ''));
+        clean = clean.replace(sosM[0], '').trim();
+      }
 
       typing.remove();
       chatHistory.push({ role: 'gemma', text: clean });
@@ -861,86 +872,62 @@ let pendingLocation = null;
 
 function shareLocation() {
   if (!navigator.geolocation) { addMsg("Location isn't available on this device.", 'gemma'); return; }
-
-  // Get location silently first
   navigator.geolocation.getCurrentPosition(pos => {
     pendingLocation = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-    const msg = "I can see where you are. Are you feeling lost or do you need help? I can send your location to your family right away. Just say yes if you'd like me to.";
+    const sos = getSosContact();
+    const sosName = sos ? sos.name : 'your emergency contact';
+    const msg = `I have your location. Are you lost? Should I send it to ${sosName}?`;
     addMsg(msg, 'gemma');
     speak(msg);
     saveToHistory('gemma', msg);
   }, () => {
-    addMsg("I couldn't find your location right now. Make sure location is turned on in your phone settings.", 'gemma');
-  }, { enableHighAccuracy: true });
+    addMsg("I couldn't get your location. Make sure location is turned on in your phone settings.", 'gemma');
+  }, { enableHighAccuracy: true, timeout: 8000 });
 }
 
-function sendLocationToFamily() {
-  if (!pendingLocation) return;
-  const { lat, lng } = pendingLocation;
-  const url = `https://www.google.com/maps?q=${lat},${lng}`;
-  const name = localStorage.getItem('gm_name') || 'Your loved one';
-  const memories = getMemories();
+function getSosContact() {
+  try { return JSON.parse(localStorage.getItem('gm_sos') || 'null'); } catch { return null; }
+}
+function saveSosContact(name, phone) {
+  localStorage.setItem('gm_sos', JSON.stringify({ name, phone }));
+}
 
-  // Find family contacts (anyone with a phone number in their story)
-  const familyWithPhone = memories.filter(m => {
-    const story = (m.story || '').toLowerCase();
-    return m.rel && /\d{3}.*\d{4}/.test(story);
-  });
+function sendLocationToEmergencyContact() {
+  const sos = getSosContact();
+  const userName = localStorage.getItem('gm_name') || 'your loved one';
 
-  // Get all family members for the SMS
-  const familyNames = memories.filter(m => m.rel).map(m => m.name);
-  const smsBody = encodeURIComponent(`Hi, this is Gemma Remember. ${name} may need help. Their current location: ${url}`);
-
-  // Try to find phone numbers from stories
-  const phones = [];
-  memories.forEach(m => {
-    const match = (m.story || '').match(/(\+?1?\d{10,12}|\d{3}[-.\s]?\d{3}[-.\s]?\d{4})/);
-    if (match) phones.push(match[0].replace(/[-.\s]/g, ''));
-  });
-
-  if (phones.length > 0) {
-    // Open SMS with pre-filled message
-    const smsUrl = `sms:${phones.join(',')}?body=${smsBody}`;
-    window.open(smsUrl, '_blank');
-    const response = `I've opened a message to your family with your location. You're safe — just stay right where you are. Someone will come find you soon.`;
-    addMsg(response, 'gemma');
-    speak(response);
-    saveToHistory('gemma', response);
-  } else if (familyNames.length > 0) {
-    // We know family but no phone numbers
-    const response = `I know your family — ${familyNames.join(', ')} — but I don't have their phone numbers yet. Can you tell me a phone number for one of them? For now, you're safe. Stay right where you are.`;
-    addMsg(response, 'gemma');
-    speak(response);
-    saveToHistory('gemma', response);
-  } else {
-    // No family saved at all
-    const response = `I don't have any family contacts saved yet. You can tell me about your family anytime and I'll remember them. For now, stay where you are — you're safe.`;
-    addMsg(response, 'gemma');
-    speak(response);
-    saveToHistory('gemma', response);
+  if (!sos) {
+    const msg = "I don't have an emergency contact saved yet. Please tell me: who should I call if you need help? Say something like \"my emergency contact is John at 555-1234\".";
+    addMsg(msg, 'gemma'); speak(msg); saveToHistory('gemma', msg);
+    pendingLocation = null;
+    return;
   }
 
-  pendingLocation = null;
+  const getAndSend = (loc) => {
+    const url = `https://maps.google.com/?q=${loc.lat},${loc.lng}`;
+    const body = encodeURIComponent(`${userName} may be lost and needs help. Location: ${url}`);
+    window.open(`sms:${sos.phone}?body=${body}`, '_blank');
+    const msg = `I've opened a text to ${sos.name} with your location. Tap send, then stay right where you are. Someone is coming.`;
+    addMsg(msg, 'gemma'); speak(msg); saveToHistory('gemma', msg);
+    pendingLocation = null;
+  };
+
+  if (pendingLocation) {
+    getAndSend(pendingLocation);
+  } else {
+    navigator.geolocation?.getCurrentPosition(
+      pos => getAndSend({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+      () => {
+        const msg = `I can't get your location right now. Call ${sos.name} directly at ${sos.phone}.`;
+        addMsg(msg, 'gemma'); speak(msg); saveToHistory('gemma', msg);
+        pendingLocation = null;
+      },
+      { enableHighAccuracy: true, timeout: 8000 }
+    );
+  }
 }
 
 // ===== MESSAGING & CALLING =====
-let pendingAction = null; // { type: 'sms'|'call', person, phone, message }
-
-function findPhoneForPerson(person) {
-  const story = person.story || '';
-  const match = story.match(/(\+?1?\d{10,12}|\d{3}[-.\s]?\d{3}[-.\s]?\d{4})/);
-  return match ? match[0].replace(/[-.\s]/g, '') : null;
-}
-
-function findPersonForAction(text) {
-  const memories = getMemories();
-  const tl = text.toLowerCase();
-  for (const p of memories) {
-    if (tl.includes(p.name.toLowerCase())) return p;
-    if (p.rel && tl.includes(p.rel.toLowerCase())) return p;
-  }
-  return null;
-}
 
 async function handleContactAction(sentText) {
   const tl = sentText.toLowerCase();
