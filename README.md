@@ -5,6 +5,7 @@
 [![Live Demo](https://img.shields.io/badge/Live%20Demo-gemma--remember--apk.vercel.app-4285F4?style=for-the-badge)](https://gemma-remember-apk.vercel.app)
 [![Download APK](https://img.shields.io/badge/Download-Android%20APK-3DDC84?style=for-the-badge&logo=android&logoColor=white)](https://github.com/Javierg720/gemma-remember-apk/releases/latest)
 [![Kaggle Notebook](https://img.shields.io/badge/Kaggle-Notebook-20BEFF?style=for-the-badge&logo=kaggle&logoColor=white)](notebooks/gemma-remember-rag-for-dementia-care.ipynb)
+[![Hackathon Writeup](https://img.shields.io/badge/Read-Submission%20Writeup-FF6F00?style=for-the-badge)](SUBMISSION.md)
 
 <p align="center">
   <img src="docs/images/chat-screen.png" alt="Gemma Remember chat screen" width="320"/>
