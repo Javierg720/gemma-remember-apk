@@ -64,16 +64,15 @@
     <div id="chatScreen" class="screen">
       <header class="chat-header">
         <div class="chat-header-left">
-          <svg width="32" height="32" viewBox="0 0 168 168" fill="none"><circle cx="84" cy="84" r="56" stroke="#4285F4" stroke-opacity="0.4" stroke-width="3"/><path d="M84 28C84 58.93 109.07 84 140 84C109.07 84 84 109.07 84 140C84 109.07 58.93 84 28 84C58.93 84 84 58.93 84 28Z" fill="#4285F4"/></svg>
+          <button class="icon-btn header-logo-btn" onclick="startNewChat()" title="New chat" aria-label="Start a new chat">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#4285F4" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z"/><line x1="9" y1="10" x2="15" y2="10"/><line x1="12" y1="7" x2="12" y2="13"/></svg>
+          </button>
           <div>
             <div class="chat-header-name">Gemma</div>
             <div class="chat-header-status" id="chatStatus">Your memory companion</div>
           </div>
         </div>
         <div class="chat-header-right">
-          <button class="icon-btn" onclick="startNewChat()" title="New chat">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z"/><line x1="9" y1="10" x2="15" y2="10"/><line x1="12" y1="7" x2="12" y2="13"/></svg>
-          </button>
           <button class="icon-btn" onclick="openReminders()" title="Reminders">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg>
           </button>

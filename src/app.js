@@ -502,10 +502,11 @@ function startChat() {
     setTimeout(() => {
       const tod = getTimeOfDay();
       const welcome = memories.length === 0
-        ? `Good ${tod}, ${name}! It's nice to see you. Tell me about the people in your life — I'd love to remember them for you.`
-        : `Good ${tod}, ${name}! I remember ${memories.length} ${memories.length === 1 ? 'person' : 'people'} so far. What's on your mind?`;
+        ? `Good ${tod}, ${name}. Tell me about the people in your life.`
+        : `Good ${tod}, ${name}. I'm here.`;
       addMsg(welcome, 'gemma');
       saveToHistory('gemma', welcome);
+      speak(welcome);
     }, 400);
   }
 }
@@ -960,9 +961,8 @@ function scrollChat() {
 }
 
 function updateStatus() {
-  const n = getMemories().length;
   const el = document.getElementById('chatStatus');
-  if (el) el.textContent = n > 0 ? `Remembering ${n} ${n === 1 ? 'person' : 'people'}` : 'Your memory companion';
+  if (el) el.textContent = 'Your memory companion';
 }
 
 // ===== LOCATION =====
@@ -1983,6 +1983,8 @@ document.getElementById('msgInput')?.addEventListener('keydown', e => { if (e.ke
 window.addEventListener('DOMContentLoaded', async () => {
   animateStars();
   cleanupOldPhotoDescriptions();
+  // Every app open starts a fresh chat — past convos still live in History.
+  localStorage.setItem('gm_session_start', Date.now().toString());
   await setupNativeNotificationListeners();
   if (getMode()) {
     startChat();
