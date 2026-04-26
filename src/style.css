@@ -109,6 +109,42 @@ a{color:#4285F4}
 .speak-btn{position:absolute;right:8px;bottom:8px;width:28px;height:28px;border:none;background:rgba(66,133,244,.1);border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;color:#4285F4;opacity:.5;transition:opacity .15s}
 .speak-btn:hover{opacity:1}
 
+/* ===== PERSON CARD (in chat) ===== */
+.person-card{display:flex;flex-direction:column;align-items:center;gap:10px;background:linear-gradient(180deg,#eef3ff 0%,#fff 100%);border:2px solid #d4e0f7;border-radius:18px;padding:18px;margin:8px 0;max-width:300px}
+.pcard-photo{width:140px;height:140px;border-radius:50%;object-fit:cover;background:#dce8ff;border:4px solid #fff;box-shadow:0 4px 16px rgba(66,133,244,.25)}
+.pcard-no-photo{display:flex;align-items:center;justify-content:center;font-size:3rem;font-weight:600;color:#4285F4}
+.pcard-info{text-align:center;width:100%}
+.pcard-name{font-size:1.5rem;font-weight:700;color:#0d3268;line-height:1.2}
+.pcard-rel{font-size:1rem;color:#4285F4;font-weight:500;margin-top:4px}
+.pcard-story{font-size:.95rem;color:#3d4f6a;line-height:1.4;margin-top:8px;text-align:left}
+.pcard-audio,.pcard-video{width:100%;margin-top:10px;border-radius:10px}
+.pcard-video{max-height:240px;background:#000}
+
+/* ===== REMINDER CARD (in chat) ===== */
+.reminder-card{background:#fff7e6;border:2px solid #ffd28a;border-radius:16px;padding:14px 16px;margin:6px 0;max-width:300px}
+.rcard-type{font-size:.75rem;font-weight:600;color:#a06400;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px}
+.rcard-title{font-size:1.15rem;font-weight:700;color:#1a2940;line-height:1.3}
+.rcard-when{font-size:.95rem;color:#5d6b85;margin-top:4px}
+.reminder-card .person-card{margin-top:12px;background:#fff;border-color:#ffd28a}
+
+/* ===== REMINDERS PANEL ===== */
+.reminder-item{display:flex;align-items:center;gap:12px;padding:14px;background:#f4f7fc;border-radius:14px;margin-bottom:8px}
+.reminder-item-icon{font-size:1.6rem;width:44px;height:44px;display:flex;align-items:center;justify-content:center;background:#fff;border-radius:50%;flex-shrink:0;border:2px solid #d4e0f7}
+.reminder-item-body{flex:1;min-width:0}
+.reminder-item-title{font-size:1rem;font-weight:600;color:#1a2940;line-height:1.3}
+.reminder-item-when{font-size:.85rem;color:#5d6b85;margin-top:2px}
+.reminder-item-del{width:36px;height:36px;border:none;background:#fff;border-radius:50%;color:#b0b8c8;cursor:pointer;font-size:1rem;display:flex;align-items:center;justify-content:center;flex-shrink:0;border:2px solid #d4e0f7}
+.reminder-item-del:hover{background:#ffeaea;color:#e53935;border-color:#e53935}
+
+.add-reminder-form{padding:18px 20px;border-bottom:1px solid #e8edf4;background:#fafcff}
+.rf-row{margin-bottom:14px}
+.rf-row label{display:block;font-size:.85rem;font-weight:600;color:#5d6b85;margin-bottom:6px}
+.rf-row input,.rf-row select{width:100%;padding:12px 14px;font-size:1rem;border:2px solid #d4e0f7;border-radius:12px;background:#fff;color:#1a2940;font-family:inherit;outline:none;min-height:48px}
+.rf-row input:focus,.rf-row select:focus{border-color:#4285F4}
+.rf-actions{display:flex;gap:10px;justify-content:flex-end;margin-bottom:0}
+.btn-ghost-small{padding:10px 18px;background:#fff;color:#5d6b85;border:2px solid #d4e0f7;border-radius:12px;font-weight:600;cursor:pointer;font-family:inherit;font-size:.95rem}
+.btn-primary-small{padding:10px 18px;background:#4285F4;color:#fff;border:none;border-radius:12px;font-weight:600;cursor:pointer;font-family:inherit;font-size:.95rem;box-shadow:0 2px 8px rgba(66,133,244,.3)}
+
 /* ===== TABLET ===== */
 @media(min-width:768px){
   body{display:flex;align-items:center;justify-content:center;background:#e8edf4}

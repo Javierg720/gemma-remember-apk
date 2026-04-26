@@ -3,8 +3,8 @@
 // ===== MEMORY =====
 function getMemories() { try { return JSON.parse(localStorage.getItem('gm_people') || '[]'); } catch { return []; } }
 function saveMemories(m) { localStorage.setItem('gm_people', JSON.stringify(m)); }
-function getReminders() { try { return JSON.parse(localStorage.getItem('gm_reminders') || '[]'); } catch { return []; } }
-function saveReminder(text) { const r = getReminders(); r.push({ text, ts: Date.now() }); localStorage.setItem('gm_reminders', JSON.stringify(r)); }
+// Legacy text-only reminders helper kept for backward read; new typed reminders are at the bottom of the file.
+function getReminders() { return getRawReminders(); }
 
 function addPerson(name, rel, story, photoB64) {
   const memories = getMemories();
@@ -703,8 +703,16 @@ function sendMessage() {
     try {
       const name = localStorage.getItem('gm_name') || 'friend';
       const recent = chatHistory.slice(-8).map(m => `${m.role === 'user' ? name : 'GEMMA'}: ${m.text}`).join('\n');
-      const reminders = getReminders();
-      const remCtx = reminders.length ? '\nREMINDERS:\n' + reminders.map(r => `- ${r.text}`).join('\n') : '';
+      const remCtx = (() => {
+        try {
+          const upcoming = getUpcomingReminders(8);
+          if (!upcoming.length) return '';
+          return '\nUPCOMING REMINDERS:\n' + upcoming.map(({ reminder, next }) => {
+            const when = next.toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' });
+            return `- ${reminder.title || reminder.text || '(reminder)'} [${reminder.type || 'note'} · ${when}]`;
+          }).join('\n');
+        } catch { return ''; }
+      })();
 
       // Check if user is asking about a known person — include their photo for vision
       let personPhoto = null;
@@ -748,7 +756,14 @@ INSTRUCTIONS:
 - If the user tells you their name (e.g. "I'm Maria" or "my name is John"), respond warmly and end with: [NAME:their_name]
 - If ${name} introduces someone ("this is my daughter Sarah"), respond warmly, end with: [SAVE:name:relationship:details]
 - If ${name} adds info about someone known, end with: [UPDATE:name:new info]
-- If ${name} mentions a reminder, confirm, end with: [REMIND:text]
+- If ${name} asks WHO someone is — "who is my son", "who is Emma", "show me my daughter" — emit [SHOW:name_or_relationship] (e.g. [SHOW:son], [SHOW:Emma], [SHOW:daughter]). The app will display their photo and play their voice clip if available. Keep your spoken reply short and warm.
+- If ${name} asks to be reminded of ANYTHING — pills/medication, doctor appointments, birthdays, parties, errands — emit [REMIND:type:title:datetime:recurrence:personId].
+  · type = medication | appointment | birthday | party | note
+  · title = short description (e.g. "Take Lipitor", "Dr. Smith", "Emma's birthday")
+  · datetime = ISO 8601 if you can compute it, OR a natural phrase like "tomorrow 8am", "today 9:30pm", "next monday 9am". Today is ${new Date().toISOString().slice(0,10)} (${new Date().toLocaleDateString('en-US', { weekday:'long' })}).
+  · recurrence = once | daily | weekly | yearly. Default daily for medication, yearly for birthdays.
+  · personId = the person's name from memory if relevant (e.g. for a birthday party). Empty if none.
+  Examples: [REMIND:medication:Take Lipitor:8am:daily:] or [REMIND:party:Emma's 7th birthday:Saturday 2pm:once:Emma] or [REMIND:appointment:Dr. Smith:tomorrow 10am:once:].
 - If ${name} mentions an emergency contact ("my emergency contact is Maria at 555-1234"), save it and end with: [SOS:name:phone]
 - You CANNOT text or call anyone. The ONLY emergency action is the location button (the pin icon) or saying "I'm lost" — that opens the SMS composer with ${name}'s location pre-filled for their emergency contact. Never claim otherwise.
 - If ${name} seems in distress or lost, gently remind them to tap the location pin or say "I'm lost".
@@ -798,8 +813,44 @@ GEMMA:`;
         if (p) { p.story = (p.story ? p.story + '. ' + updM[2].trim() : updM[2].trim()); saveMemories(getMemories()); }
         clean = reply.replace(updM[0], '').trim();
       }
+      // [REMIND:type:title:datetime:recurrence:personId] — all but type:title are optional
       const remM = reply.match(/\[REMIND:([^\]]*)\]/);
-      if (remM) { saveReminder(remM[1].trim()); clean = reply.replace(remM[0], '').trim(); }
+      if (remM) {
+        const parts = remM[1].split(':').map(s => s.trim());
+        if (parts.length >= 2 && /^(medication|appointment|birthday|party|note)$/i.test(parts[0])) {
+          // Rich format
+          const type = parts[0].toLowerCase();
+          const title = parts[1];
+          const dtRaw = parts[2] || '';
+          const recurrence = parts[3] || (type === 'medication' ? 'daily' : type === 'birthday' || type === 'party' ? 'yearly' : 'once');
+          const personId = parts[4] || null;
+          const datetime = parseFlexibleDatetime(dtRaw);
+          const r = addReminder({ type, title, datetime, recurrence, personId });
+          clean = clean.replace(remM[0], '').trim();
+          // Render the new reminder card inline
+          setTimeout(() => showReminderCard(r), 200);
+        } else {
+          // Legacy: just text
+          saveReminder(remM[1].trim());
+          clean = clean.replace(remM[0], '').trim();
+        }
+      }
+
+      // [SHOW:name|relationship] — pop a person card with photo + voice clip into the chat
+      const showM = reply.match(/\[SHOW:([^\]]*)\]/);
+      if (showM) {
+        const target = showM[1].trim();
+        clean = clean.replace(showM[0], '').trim();
+        setTimeout(() => {
+          const ok = showPersonCard(target);
+          if (!ok) {
+            const msg = `I don't have a picture of your ${target} yet — would you like to add one?`;
+            addMsg(msg, 'gemma');
+            speak(msg);
+            saveToHistory('gemma', msg);
+          }
+        }, 200);
+      }
 
       const sosM = reply.match(/\[SOS:([^:]*):([^\]]*)\]/);
       if (sosM) {
@@ -1199,10 +1250,702 @@ function stopListening() {
   try { speechSynthesis?.cancel(); } catch {}
 }
 
-// ===== INIT =====
+// =====================================================================
+// ===== REMINDERS v2 — typed reminders with scheduled notifications ====
+// =====================================================================
+//
+// Schema: { id, type, title, datetime (ISO), recurrence, personId, notifications[], createdAt }
+// type:        'medication' | 'appointment' | 'birthday' | 'party' | 'note'
+// recurrence:  'once' | 'daily' | 'weekly' | 'yearly'
+// personId:    person.name (we use name as id since names are unique in addPerson)
+// notifications: array of { offsetMin, fired, label }
+//
+// Old-format reminders ({text, ts}) remain readable; they're rendered as 'note' type.
+
+const REM_KEY = 'gm_reminders';
+const FIRED_KEY = 'gm_fired_notifications';   // {[reminderId+occurrence]: true}
+const PENDING_NOTICE_KEY = 'gm_pending_notice'; // last notification user hasn't seen
+
+function newReminderId() { return 'r_' + Date.now() + '_' + Math.floor(Math.random() * 1000); }
+
+function getRawReminders() { try { return JSON.parse(localStorage.getItem(REM_KEY) || '[]'); } catch { return []; } }
+function saveRawReminders(arr) { localStorage.setItem(REM_KEY, JSON.stringify(arr)); }
+
+// Default notification offsets per type (in minutes; negative = before)
+function defaultNotifications(type) {
+  switch (type) {
+    case 'medication':  return [{ offsetMin: 0, fired: false, label: 'now' }];
+    case 'appointment': return [
+      { offsetMin: 0, fired: false, label: 'now' },
+      { offsetMin: -180, fired: false, label: '3 hours before' }
+    ];
+    case 'birthday':    return [
+      { offsetMin: -1440, fired: false, label: 'day before' },
+      { offsetMin: 0, fired: false, label: 'morning of' }
+    ];
+    case 'party':       return [
+      { offsetMin: -1440, fired: false, label: 'day before' },
+      { offsetMin: -480, fired: false, label: 'morning of' },
+      { offsetMin: -180, fired: false, label: '3 hours before' }
+    ];
+    default: return [{ offsetMin: 0, fired: false, label: 'at time' }];
+  }
+}
+
+function addReminder({ type, title, datetime, recurrence, personId }) {
+  const rems = getRawReminders();
+  const r = {
+    id: newReminderId(),
+    type: type || 'note',
+    title: title || '',
+    datetime: datetime || new Date().toISOString(),
+    recurrence: recurrence || (type === 'birthday' ? 'yearly' : type === 'medication' ? 'daily' : 'once'),
+    personId: personId || null,
+    notifications: defaultNotifications(type),
+    createdAt: Date.now()
+  };
+  rems.push(r);
+  saveRawReminders(rems);
+  scheduleAllNotifications();
+  return r;
+}
+
+// Legacy: keep the old text-based saveReminder working
+function saveReminder(text) {
+  const rems = getRawReminders();
+  rems.push({ id: newReminderId(), type: 'note', title: text, text, ts: Date.now(), createdAt: Date.now() });
+  saveRawReminders(rems);
+  scheduleAllNotifications();
+}
+
+function deleteReminder(id) {
+  saveRawReminders(getRawReminders().filter(r => r.id !== id));
+  scheduleAllNotifications();
+}
+
+function updateReminder(id, patch) {
+  const rems = getRawReminders();
+  const r = rems.find(x => x.id === id);
+  if (!r) return;
+  Object.assign(r, patch);
+  saveRawReminders(rems);
+  scheduleAllNotifications();
+}
+
+// Returns the next occurrence Date for a reminder based on recurrence
+// Parse the model's datetime string. Accepts ISO, "YYYY-MM-DD HH:MM", or a few natural-language hints.
+// On ambiguity, returns ISO of best guess; on failure, defaults to "in 1 hour".
+function parseFlexibleDatetime(s) {
+  if (!s) return new Date(Date.now() + 3600000).toISOString();
+  const trimmed = s.trim();
+
+  // Direct ISO / Date.parse
+  const direct = Date.parse(trimmed);
+  if (!isNaN(direct)) return new Date(direct).toISOString();
+
+  const now = new Date();
+  const lower = trimmed.toLowerCase();
+
+  // "tomorrow [at] 8am" / "today 9:30pm" / "tonight 9pm"
+  const dayWord = /^(today|tonight|tomorrow|day after tomorrow)/.exec(lower);
+  if (dayWord) {
+    const d = new Date(now);
+    if (dayWord[1] === 'tomorrow') d.setDate(d.getDate() + 1);
+    if (dayWord[1] === 'day after tomorrow') d.setDate(d.getDate() + 2);
+    if (dayWord[1] === 'tonight') d.setHours(20, 0, 0, 0);
+    const time = /(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/.exec(lower.slice(dayWord[0].length));
+    if (time) {
+      let hour = parseInt(time[1], 10);
+      const min = parseInt(time[2] || '0', 10);
+      const ampm = time[3];
+      if (ampm === 'pm' && hour < 12) hour += 12;
+      if (ampm === 'am' && hour === 12) hour = 0;
+      d.setHours(hour, min, 0, 0);
+    }
+    return d.toISOString();
+  }
+
+  // "next monday 8am" — pick next weekday
+  const weekdays = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
+  const nextDay = /^next\s+(sunday|monday|tuesday|wednesday|thursday|friday|saturday)/.exec(lower);
+  if (nextDay) {
+    const target = weekdays.indexOf(nextDay[1]);
+    const d = new Date(now);
+    const diff = (target + 7 - d.getDay()) % 7 || 7;
+    d.setDate(d.getDate() + diff);
+    const time = /(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/.exec(lower.slice(nextDay[0].length));
+    if (time) {
+      let hour = parseInt(time[1], 10);
+      const min = parseInt(time[2] || '0', 10);
+      if (time[3] === 'pm' && hour < 12) hour += 12;
+      if (time[3] === 'am' && hour === 12) hour = 0;
+      d.setHours(hour, min, 0, 0);
+    } else {
+      d.setHours(9, 0, 0, 0);
+    }
+    return d.toISOString();
+  }
+
+  // Plain time today: "8am", "9:30pm"
+  const timeOnly = /^(\d{1,2})(?::(\d{2}))?\s*(am|pm)$/.exec(lower);
+  if (timeOnly) {
+    const d = new Date(now);
+    let hour = parseInt(timeOnly[1], 10);
+    const min = parseInt(timeOnly[2] || '0', 10);
+    if (timeOnly[3] === 'pm' && hour < 12) hour += 12;
+    if (timeOnly[3] === 'am' && hour === 12) hour = 0;
+    d.setHours(hour, min, 0, 0);
+    if (d <= now) d.setDate(d.getDate() + 1); // assume tomorrow if already past
+    return d.toISOString();
+  }
+
+  // Fallback: 1 hour from now
+  return new Date(Date.now() + 3600000).toISOString();
+}
+
+function nextOccurrence(reminder, after = new Date()) {
+  if (!reminder.datetime) return null;
+  let dt = new Date(reminder.datetime);
+  if (isNaN(dt.getTime())) return null;
+  if (dt > after) return dt;
+  switch (reminder.recurrence) {
+    case 'daily':
+      while (dt <= after) dt = new Date(dt.getTime() + 86400000);
+      return dt;
+    case 'weekly':
+      while (dt <= after) dt = new Date(dt.getTime() + 7 * 86400000);
+      return dt;
+    case 'yearly':
+      while (dt <= after) {
+        const next = new Date(dt);
+        next.setFullYear(next.getFullYear() + 1);
+        dt = next;
+      }
+      return dt;
+    default:
+      return null; // 'once' and already past
+  }
+}
+
+function getUpcomingReminders(limit = 10) {
+  const now = new Date();
+  return getRawReminders()
+    .map(r => {
+      const next = r.text && !r.type ? null : nextOccurrence(r, now);
+      return { reminder: r, next };
+    })
+    .filter(x => x.next)
+    .sort((a, b) => a.next - b.next)
+    .slice(0, limit);
+}
+
+function getTodayReminders() {
+  const now = new Date();
+  const eod = new Date(now);
+  eod.setHours(23, 59, 59, 999);
+  return getRawReminders()
+    .map(r => ({ reminder: r, next: nextOccurrence(r, now) }))
+    .filter(x => x.next && x.next <= eod);
+}
+
+// =====================================================================
+// ===== NOTIFICATIONS — schedule + dispatch ============================
+// =====================================================================
+
+const isNative = () => !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+
+let webNotificationTimers = [];
+
+async function ensureNotificationPermission() {
+  if (isNative()) {
+    try {
+      const LN = window.Capacitor.Plugins.LocalNotifications;
+      if (LN) {
+        const { display } = await LN.requestPermissions();
+        return display === 'granted';
+      }
+    } catch (e) { console.warn('Native notif permission failed:', e); }
+    return false;
+  }
+  if (!('Notification' in window)) return false;
+  if (Notification.permission === 'granted') return true;
+  if (Notification.permission === 'denied') return false;
+  try {
+    const perm = await Notification.requestPermission();
+    return perm === 'granted';
+  } catch { return false; }
+}
+
+function notificationKey(reminderId, occurrenceMs, offsetMin) {
+  return `${reminderId}__${occurrenceMs}__${offsetMin}`;
+}
+
+function getFiredMap() { try { return JSON.parse(localStorage.getItem(FIRED_KEY) || '{}'); } catch { return {}; } }
+function markFired(key) {
+  const m = getFiredMap();
+  m[key] = Date.now();
+  // prune entries older than 30 days
+  const cutoff = Date.now() - 30 * 86400000;
+  Object.keys(m).forEach(k => { if (m[k] < cutoff) delete m[k]; });
+  localStorage.setItem(FIRED_KEY, JSON.stringify(m));
+}
+
+function clearWebTimers() {
+  webNotificationTimers.forEach(id => clearTimeout(id));
+  webNotificationTimers = [];
+}
+
+async function scheduleAllNotifications() {
+  if (!(await ensureNotificationPermission())) return;
+
+  if (isNative()) {
+    await scheduleNativeNotifications();
+  } else {
+    scheduleWebNotifications();
+  }
+}
+
+function scheduleWebNotifications() {
+  clearWebTimers();
+  const now = Date.now();
+  const horizon = now + 24 * 3600 * 1000;
+  const fired = getFiredMap();
+  const rems = getRawReminders();
+
+  rems.forEach(r => {
+    if (!r.notifications || !r.datetime) return;
+    const next = nextOccurrence(r, new Date());
+    if (!next) return;
+    const occMs = next.getTime();
+
+    r.notifications.forEach(n => {
+      const fireAt = occMs + n.offsetMin * 60000;
+      const key = notificationKey(r.id, occMs, n.offsetMin);
+      if (fired[key]) return;
+      if (fireAt <= now || fireAt > horizon) return;
+
+      const delay = fireAt - now;
+      const timer = setTimeout(() => fireWebNotification(r, n.label, occMs, n.offsetMin), delay);
+      webNotificationTimers.push(timer);
+    });
+  });
+}
+
+function notificationCopy(reminder, label) {
+  const t = reminder.type;
+  const title = reminder.title || 'Reminder';
+  if (t === 'medication') return { title: `Time for your medication`, body: `${title} — tap to mark taken` };
+  if (t === 'appointment') return label === 'now'
+    ? { title: `${title} — now`, body: `It's time for your appointment.` }
+    : { title: `Coming up: ${title}`, body: `Your appointment is in about ${Math.abs(reminder.notifications.find(n => n.label === label)?.offsetMin) / 60 | 0} hours.` };
+  if (t === 'birthday') return label === 'day before'
+    ? { title: `${title}'s birthday is tomorrow`, body: `Don't forget to wish them a happy birthday.` }
+    : { title: `It's ${title}'s birthday today`, body: `A happy birthday to ${title}.` };
+  if (t === 'party') {
+    if (label === 'day before') return { title: `${title} is tomorrow`, body: `Get ready — the party is tomorrow.` };
+    if (label === 'morning of') return { title: `${title} is today`, body: `The party is later today.` };
+    return { title: `${title} is in 3 hours`, body: `Time to start getting ready.` };
+  }
+  return { title, body: label || 'Reminder' };
+}
+
+function fireWebNotification(reminder, label, occMs, offsetMin) {
+  const key = notificationKey(reminder.id, occMs, offsetMin);
+  markFired(key);
+  const { title, body } = notificationCopy(reminder, label);
+  setPendingNotice({ reminderId: reminder.id, personId: reminder.personId, type: reminder.type, title, body, firedAt: Date.now() });
+
+  if ('Notification' in window && Notification.permission === 'granted') {
+    try {
+      const n = new Notification(title, { body, icon: '/assets/icon-192.png', tag: reminder.id });
+      n.onclick = () => { window.focus(); openReminderInChat(reminder.id); n.close(); };
+    } catch (e) { console.warn('Web notification show failed:', e); }
+  }
+}
+
+async function scheduleNativeNotifications() {
+  const LN = window.Capacitor?.Plugins?.LocalNotifications;
+  if (!LN) return;
+  try {
+    // Cancel previously scheduled
+    const pending = await LN.getPending();
+    if (pending?.notifications?.length) {
+      await LN.cancel({ notifications: pending.notifications.map(n => ({ id: n.id })) });
+    }
+  } catch (e) { console.warn('LN cancel failed:', e); }
+
+  const now = Date.now();
+  const horizon = now + 30 * 86400000; // 30 days for native (more durable than web)
+  const fired = getFiredMap();
+  const rems = getRawReminders();
+  const list = [];
+  let nid = 1;
+
+  rems.forEach(r => {
+    if (!r.notifications || !r.datetime) return;
+    let next = nextOccurrence(r, new Date());
+    if (!next) return;
+    let occMs = next.getTime();
+
+    // For recurring, schedule next 3 occurrences
+    const occurrences = [next];
+    if (r.recurrence === 'daily') for (let i = 1; i < 7; i++) occurrences.push(new Date(occMs + i * 86400000));
+    if (r.recurrence === 'weekly') for (let i = 1; i < 3; i++) occurrences.push(new Date(occMs + i * 7 * 86400000));
+
+    occurrences.forEach(occ => {
+      r.notifications.forEach(n => {
+        const fireAt = occ.getTime() + n.offsetMin * 60000;
+        const key = notificationKey(r.id, occ.getTime(), n.offsetMin);
+        if (fired[key]) return;
+        if (fireAt <= now || fireAt > horizon) return;
+        const { title, body } = notificationCopy(r, n.label);
+        list.push({
+          id: nid++,
+          title,
+          body,
+          schedule: { at: new Date(fireAt) },
+          extra: { reminderId: r.id, personId: r.personId, type: r.type, key }
+        });
+      });
+    });
+  });
+
+  if (list.length === 0) return;
+  try { await LN.schedule({ notifications: list }); }
+  catch (e) { console.warn('LN schedule failed:', e); }
+}
+
+function setPendingNotice(notice) {
+  localStorage.setItem(PENDING_NOTICE_KEY, JSON.stringify(notice));
+}
+function getPendingNotice() {
+  try { return JSON.parse(localStorage.getItem(PENDING_NOTICE_KEY) || 'null'); } catch { return null; }
+}
+function clearPendingNotice() { localStorage.removeItem(PENDING_NOTICE_KEY); }
+
+function openReminderInChat(reminderId) {
+  // If we're not on chat screen, navigate there
+  showScreen('chatScreen');
+  const rem = getRawReminders().find(r => r.id === reminderId);
+  if (!rem) return;
+  showReminderCard(rem);
+}
+
+// =====================================================================
+// ===== PERSON / REMINDER CARDS in chat ================================
+// =====================================================================
+
+function personCardHtml(person) {
+  if (!person) return '';
+  const photo = person.photo
+    ? `<img class="pcard-photo" src="data:image/jpeg;base64,${person.photo}" alt="${person.name}">`
+    : `<div class="pcard-photo pcard-no-photo">${(person.name || '?')[0].toUpperCase()}</div>`;
+  const rel = person.rel ? `<div class="pcard-rel">${escapeHtml(person.rel)}</div>` : '';
+  const story = person.story ? `<div class="pcard-story">${escapeHtml(person.story).slice(0, 200)}</div>` : '';
+  let audio = '';
+  if (person.voiceClip) {
+    const src = `data:audio/webm;base64,${person.voiceClip}`;
+    audio = `<audio class="pcard-audio" controls preload="none" src="${src}"></audio>`;
+  }
+  let video = '';
+  if (person.videoClip) {
+    const src = `data:video/webm;base64,${person.videoClip}`;
+    video = `<video class="pcard-video" controls playsinline preload="none" src="${src}"></video>`;
+  }
+  return `
+    <div class="person-card">
+      ${photo}
+      <div class="pcard-info">
+        <div class="pcard-name">${escapeHtml(person.name)}</div>
+        ${rel}
+        ${story}
+        ${audio}
+        ${video}
+      </div>
+    </div>`;
+}
+
+function escapeHtml(s) {
+  return String(s || '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function showPersonCard(personOrName) {
+  const person = typeof personOrName === 'string' ? findPersonByQuery(personOrName) : personOrName;
+  if (!person) return false;
+  addMsg(personCardHtml(person), 'gemma', true);
+  // Update lastMentioned
+  const all = getMemories();
+  const target = all.find(p => p.name === person.name);
+  if (target) { target.lastMentioned = Date.now(); saveMemories(all); }
+  return true;
+}
+
+// More forgiving than findPerson: matches by name or by relationship word
+function findPersonByQuery(q) {
+  if (!q) return null;
+  const ql = q.toLowerCase().trim();
+  const memories = getMemories();
+  // Exact name match first
+  let p = memories.find(m => m.name.toLowerCase() === ql);
+  if (p) return p;
+  // Relationship match (e.g. "son", "daughter", "wife") — prefer most-recently-mentioned
+  p = memories
+    .filter(m => m.rel && m.rel.toLowerCase().split(/[\s,/]+/).includes(ql))
+    .sort((a, b) => (b.lastMentioned || 0) - (a.lastMentioned || 0))[0];
+  if (p) return p;
+  // Substring on name
+  p = memories.find(m => m.name.toLowerCase().includes(ql) || ql.includes(m.name.toLowerCase()));
+  if (p) return p;
+  // Substring on relationship
+  p = memories.find(m => m.rel && m.rel.toLowerCase().includes(ql));
+  return p || null;
+}
+
+function showReminderCard(reminder) {
+  const dt = new Date(reminder.datetime);
+  const when = dt.toLocaleString('en-US', { weekday: 'long', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  const typeLabel = ({ medication: 'Medication', appointment: 'Appointment', birthday: 'Birthday', party: 'Birthday party', note: 'Reminder' })[reminder.type] || 'Reminder';
+
+  let inner = `<div class="rcard-type">${typeLabel}</div>
+               <div class="rcard-title">${escapeHtml(reminder.title)}</div>
+               <div class="rcard-when">${when}</div>`;
+
+  if (reminder.personId) {
+    const p = findPersonByQuery(reminder.personId);
+    if (p && p.photo) {
+      inner += personCardHtml(p);
+    }
+  }
+  addMsg(`<div class="reminder-card">${inner}</div>`, 'gemma', true);
+}
+
+// =====================================================================
+// ===== REMINDERS PANEL UI =============================================
+// =====================================================================
+
+function openReminders() {
+  let panel = document.getElementById('remindersPanel');
+  if (!panel) {
+    panel = document.createElement('div');
+    panel.id = 'remindersPanel';
+    panel.className = 'history-panel'; // reuse styling
+    panel.innerHTML = `
+      <div class="history-header">
+        <h2>Reminders</h2>
+        <button class="icon-btn" onclick="closeReminders()">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="history-actions">
+        <button class="history-action-btn" onclick="showAddReminderForm()">+ Add reminder</button>
+      </div>
+      <div id="addReminderForm" class="add-reminder-form" style="display:none"></div>
+      <div class="history-list" id="remindersList"></div>
+    `;
+    document.getElementById('chatScreen').appendChild(panel);
+  }
+  panel.style.display = '';
+  renderReminders();
+}
+
+function closeReminders() {
+  const panel = document.getElementById('remindersPanel');
+  if (panel) panel.style.display = 'none';
+}
+
+function renderReminders() {
+  const list = document.getElementById('remindersList');
+  if (!list) return;
+  const upcoming = getUpcomingReminders(50);
+  if (upcoming.length === 0) {
+    list.innerHTML = '<p style="color:#8b95a8;text-align:center;padding:40px">No reminders yet.<br>Tap "+ Add reminder" or just tell Gemma.</p>';
+    return;
+  }
+  list.innerHTML = '';
+  upcoming.forEach(({ reminder, next }) => {
+    const item = document.createElement('div');
+    item.className = 'reminder-item';
+    const when = next.toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+    const typeLabel = ({ medication: '💊', appointment: '🏥', birthday: '🎂', party: '🎉', note: '📝' })[reminder.type] || '📝';
+    const recur = reminder.recurrence !== 'once' ? ` · ${reminder.recurrence}` : '';
+    item.innerHTML = `
+      <div class="reminder-item-icon">${typeLabel}</div>
+      <div class="reminder-item-body">
+        <div class="reminder-item-title">${escapeHtml(reminder.title || '(no title)')}</div>
+        <div class="reminder-item-when">${when}${recur}</div>
+      </div>
+      <button class="reminder-item-del" onclick="deleteReminder('${reminder.id}'); renderReminders();" aria-label="Delete">&#10005;</button>
+    `;
+    list.appendChild(item);
+  });
+}
+
+function showAddReminderForm() {
+  const form = document.getElementById('addReminderForm');
+  if (!form) return;
+  const people = getMemories();
+  const peopleOpts = people.map(p => `<option value="${escapeHtml(p.name)}">${escapeHtml(p.name)}${p.rel ? ' (' + escapeHtml(p.rel) + ')' : ''}</option>`).join('');
+  // Default datetime: 1 hour from now, rounded
+  const defaultDt = new Date(Date.now() + 3600000);
+  defaultDt.setMinutes(0, 0, 0);
+  const localIso = new Date(defaultDt.getTime() - defaultDt.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+
+  form.innerHTML = `
+    <div class="rf-row">
+      <label>What kind?</label>
+      <select id="rf_type">
+        <option value="medication">💊 Medication</option>
+        <option value="appointment">🏥 Doctor / appointment</option>
+        <option value="party">🎉 Birthday party</option>
+        <option value="birthday">🎂 Birthday</option>
+        <option value="note">📝 Note</option>
+      </select>
+    </div>
+    <div class="rf-row">
+      <label>What to remember?</label>
+      <input id="rf_title" type="text" placeholder="e.g. Take Lipitor, Dr. Smith, Emma's birthday">
+    </div>
+    <div class="rf-row">
+      <label>When?</label>
+      <input id="rf_datetime" type="datetime-local" value="${localIso}">
+    </div>
+    <div class="rf-row">
+      <label>Repeats?</label>
+      <select id="rf_recur">
+        <option value="once">Just once</option>
+        <option value="daily">Every day</option>
+        <option value="weekly">Every week</option>
+        <option value="yearly">Every year</option>
+      </select>
+    </div>
+    <div class="rf-row">
+      <label>Who is it for? (optional)</label>
+      <select id="rf_person">
+        <option value="">— No one —</option>
+        ${peopleOpts}
+      </select>
+    </div>
+    <div class="rf-row rf-actions">
+      <button class="btn-ghost-small" onclick="hideAddReminderForm()">Cancel</button>
+      <button class="btn-primary-small" onclick="submitAddReminder()">Save</button>
+    </div>
+  `;
+  form.style.display = '';
+
+  // Auto-set sensible recurrence when type changes
+  document.getElementById('rf_type').addEventListener('change', e => {
+    const recur = document.getElementById('rf_recur');
+    if (e.target.value === 'medication') recur.value = 'daily';
+    else if (e.target.value === 'birthday' || e.target.value === 'party') recur.value = 'yearly';
+    else recur.value = 'once';
+  });
+}
+
+function hideAddReminderForm() {
+  const form = document.getElementById('addReminderForm');
+  if (form) { form.style.display = 'none'; form.innerHTML = ''; }
+}
+
+function submitAddReminder() {
+  const type = document.getElementById('rf_type').value;
+  const title = document.getElementById('rf_title').value.trim();
+  const dt = document.getElementById('rf_datetime').value;
+  const recurrence = document.getElementById('rf_recur').value;
+  const personId = document.getElementById('rf_person').value || null;
+  if (!title || !dt) { alert('Please add a title and time.'); return; }
+  addReminder({ type, title, datetime: new Date(dt).toISOString(), recurrence, personId });
+  hideAddReminderForm();
+  renderReminders();
+  ensureNotificationPermission();
+}
+
+// =====================================================================
+// ===== MORNING MESSAGE + PENDING-NOTICE on app open ===================
+// =====================================================================
+
+const MORNING_KEY = 'gm_last_morning';
+
+function shouldShowMorningMessage() {
+  const today = new Date().toDateString();
+  const last = localStorage.getItem(MORNING_KEY);
+  const h = new Date().getHours();
+  return last !== today && h >= 6 && h < 12;
+}
+
+function buildMorningMessage(name) {
+  const today = getTodayReminders();
+  const hello = `Good morning${name ? ', ' + name : ''}.`;
+  if (today.length === 0) {
+    return `${hello} It's a quiet day — nothing on the calendar so far. I'm right here whenever you need me.`;
+  }
+  const lines = today.map(({ reminder, next }) => {
+    const time = next.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+    const ico = ({ medication: '💊', appointment: '🏥', birthday: '🎂', party: '🎉', note: '📝' })[reminder.type] || '•';
+    return `${ico} ${reminder.title} at ${time}`;
+  });
+  return `${hello} Here's what's on for today:\n\n${lines.join('\n')}`;
+}
+
+async function maybeShowMorningMessage() {
+  if (!shouldShowMorningMessage()) return;
+  const name = localStorage.getItem('gm_name') || '';
+  const msg = buildMorningMessage(name);
+  setTimeout(() => {
+    addMsg(msg, 'gemma');
+    saveToHistory('gemma', msg);
+    speak(msg);
+    localStorage.setItem(MORNING_KEY, new Date().toDateString());
+  }, 700);
+}
+
+async function maybeShowPendingNotice() {
+  const notice = getPendingNotice();
+  if (!notice) return;
+  const ageMin = (Date.now() - notice.firedAt) / 60000;
+  if (ageMin > 240) { clearPendingNotice(); return; }   // older than 4h, drop
+  const rem = getRawReminders().find(r => r.id === notice.reminderId);
+  setTimeout(() => {
+    addMsg(`<strong>${escapeHtml(notice.title)}</strong><br>${escapeHtml(notice.body)}`, 'gemma', true);
+    if (rem) showReminderCard(rem);
+    clearPendingNotice();
+  }, 400);
+}
+
+// Capacitor: when user taps a notification, mark fired + open reminder card
+async function setupNativeNotificationListeners() {
+  if (!isNative()) return;
+  const LN = window.Capacitor?.Plugins?.LocalNotifications;
+  if (!LN) return;
+  try {
+    LN.addListener('localNotificationActionPerformed', evt => {
+      const extra = evt?.notification?.extra || {};
+      if (extra.key) markFired(extra.key);
+      if (extra.reminderId) {
+        setPendingNotice({ reminderId: extra.reminderId, personId: extra.personId, type: extra.type, title: evt.notification.title, body: evt.notification.body, firedAt: Date.now() });
+        openReminderInChat(extra.reminderId);
+      }
+    });
+  } catch (e) { console.warn('LN listener failed:', e); }
+}
+
+// =====================================================================
+// ===== INIT ===========================================================
+// =====================================================================
 document.getElementById('msgInput')?.addEventListener('keydown', e => { if (e.key === 'Enter') sendMessage(); });
 
-window.addEventListener('DOMContentLoaded', () => {
+window.addEventListener('DOMContentLoaded', async () => {
   animateStars();
-  if (getMode()) startChat();
+  await setupNativeNotificationListeners();
+  if (getMode()) {
+    startChat();
+    await maybeShowPendingNotice();
+    await maybeShowMorningMessage();
+    scheduleAllNotifications();
+    // ask permission softly after first interaction
+    setTimeout(() => ensureNotificationPermission(), 3000);
+  }
 });
+
+// Re-schedule when tab regains focus (web: setTimeouts can be killed by suspend)
+window.addEventListener('focus', () => { if (getMode()) scheduleAllNotifications(); });
+document.addEventListener('visibilitychange', () => { if (!document.hidden && getMode()) scheduleAllNotifications(); });
