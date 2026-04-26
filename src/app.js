@@ -6,6 +6,25 @@ function saveMemories(m) { localStorage.setItem('gm_people', JSON.stringify(m));
 // Legacy text-only reminders helper kept for backward read; new typed reminders are at the bottom of the file.
 function getReminders() { return getRawReminders(); }
 
+// One-time cleanup: strip auto-generated photo descriptions from previously saved persons
+function cleanupOldPhotoDescriptions() {
+  if (localStorage.getItem('gm_cleaned_photo_descs') === '1') return;
+  const memories = (() => { try { return JSON.parse(localStorage.getItem('gm_people') || '[]'); } catch { return []; } })();
+  let changed = false;
+  memories.forEach(p => {
+    if (!p.story) return;
+    const before = p.story;
+    let s = p.story
+      .replace(/\.?\s*Photo description:[\s\S]*?(?=(\.\s+[A-Z])|$)/gi, '')
+      .replace(/\b(A|The)\s+(man|woman|boy|girl|young (?:adult )?(?:male|female)|person)\s+with\s+[^.]{10,300}\./gi, '')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+    if (s !== before) { p.story = s; changed = true; }
+  });
+  if (changed) localStorage.setItem('gm_people', JSON.stringify(memories));
+  localStorage.setItem('gm_cleaned_photo_descs', '1');
+}
+
 function addPerson(name, rel, story, photoB64) {
   const memories = getMemories();
   const existing = memories.find(m => m.name.toLowerCase() === name.toLowerCase());
@@ -169,7 +188,7 @@ async function aiGenerate(prompt, imageB64) {
   if (imageB64) parts.push({ inlineData: { mimeType: 'image/jpeg', data: imageB64 } });
   const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${key}`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ contents: [{ parts }], generationConfig: { maxOutputTokens: 500, temperature: 0.7 } })
+    body: JSON.stringify({ contents: [{ parts }], generationConfig: { maxOutputTokens: 180, temperature: 0.7 } })
   });
   if (!resp.ok) throw new Error(`API ${resp.status}`);
   const data = await resp.json();
@@ -728,6 +747,8 @@ function sendMessage() {
 
       const prompt = `You are Gemma, ${name}'s memory companion. Warm, brief, real. No robotic language.
 
+LENGTH RULE — STRICT: Reply in 1-2 short sentences. Never more than 2. Do NOT explain, restate, or list. If a question can be answered in 5 words, answer in 5 words. Old people get tired by long messages — short is kind.
+
 CRITICAL HONESTY RULES — NEVER VIOLATE:
 - You are a chat app. You CANNOT send texts, make calls, or contact anyone on your own.
 - The ONLY way a message or call actually happens is if you emit an action tag (see below) that the app executes.
@@ -772,7 +793,7 @@ INSTRUCTIONS:
 - If ${name} sends a photo and it matches someone in memory, warmly say who it is, their relationship, and mention when they were last talked about. If they have a voice/video intro, offer to play it.
 - If ${name} asks "who is this?" about someone in memory, give a warm, personal answer: their name, relationship, a personal detail from their story, and when they last came up.
 - You can suggest recording a voice or video intro for family members so ${name} can hear their voice.
-- Otherwise respond naturally. 1-3 sentences max. ONLY use facts from memory or what ${name} just said.
+- Otherwise respond naturally. 1-2 short sentences MAX. ONLY use facts from memory or what ${name} just said.
 - Be warm, patient, and reassuring. This person may have memory challenges. Make them feel safe and loved.
 
 GEMMA:`;
@@ -794,16 +815,7 @@ GEMMA:`;
 
       const saveM = reply.match(/\[SAVE:([^:]*):([^:]*):([^\]]*)\]/);
       if (saveM) {
-        let description = saveM[3].trim();
-        if (hasPhoto && sentPhoto) {
-          try {
-            const desc = await aiGenerate(
-              'Describe EVERYTHING you see in this photo. How many people? Their ages, gender, skin color, hair, clothing, facial expressions, posture. Describe the background too. Be very specific and detailed. 3-4 sentences.',
-              sentPhoto
-            );
-            description = (description ? description + '. ' : '') + 'Photo description: ' + desc.trim();
-          } catch (e) { console.warn('Vision description failed:', e); }
-        }
+        const description = saveM[3].trim();
         addPerson(saveM[1].trim(), saveM[2].trim(), description, hasPhoto ? sentPhoto : '');
         clean = reply.replace(saveM[0], '').trim();
       }
@@ -1935,6 +1947,7 @@ document.getElementById('msgInput')?.addEventListener('keydown', e => { if (e.ke
 
 window.addEventListener('DOMContentLoaded', async () => {
   animateStars();
+  cleanupOldPhotoDescriptions();
   await setupNativeNotificationListeners();
   if (getMode()) {
     startChat();
