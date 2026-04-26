@@ -6,38 +6,69 @@ function saveMemories(m) { localStorage.setItem('gm_people', JSON.stringify(m));
 // Legacy text-only reminders helper kept for backward read; new typed reminders are at the bottom of the file.
 function getReminders() { return getRawReminders(); }
 
-// One-time cleanup: strip auto-generated photo descriptions from previously saved persons
+// Strip AI-generated photo description sentences from a story field.
+// Splits on sentence boundaries and drops ones that match a photo-description fingerprint.
+function stripPhotoDescriptions(story) {
+  if (!story) return story;
+  const photoDescPatterns = [
+    /^Photo description:/i,
+    /^(He|She|They)\s+(gazes|stands|sits|poses|appears|is positioned|is wearing|wears|has)\b/i,
+    /\b(He|She|They) (?:gazes|stares|looks) (?:directly|straight) at the camera\b/i,
+    /\b(checkered|plaid|striped|button-down|button up|polo|collared)\s+(shirt|blouse|top)\b/i,
+    /\bfacial expression\b/i,
+    /\bheadshot\b/i,
+    /\bposture\b/i,
+    /\b(solid|plain|neutral)\s+(color\s+)?background\b/i,
+    /\bagainst (?:a|the)\s+(?:plain|solid|white|gray|grey|black|colored|neutral)\s+(?:background|backdrop|wall)/i,
+    /\bThe (?:man|woman|boy|girl|person|individual|subject)\s+(?:is|has|stands|wears|gazes|appears|features)\b/i,
+    /\bA (?:young|middle-aged|elderly)\s+(?:adult\s+)?(?:male|female|man|woman)\s+with\b/i,
+    /\b(?:short|long|curly|straight|wavy|cropped)\s+(?:brown|black|blonde|gray|grey|red|dark|light)\s+hair\b/i,
+    /\b(?:fair|tan|olive|dark|light|pale)\s+(?:skin|complexion)\b/i,
+    /\bThis (?:photo|image|picture) (?:features|shows|depicts|contains)\b/i,
+    /\bIn (?:the|this) (?:photo|image|picture)\b/i,
+    /\bstandard headshot\b/i,
+    /\b(?:single|one)\s+(?:young|adult|elderly)?\s*(?:man|woman|male|female|person)\s+with\b/i,
+    /\bgazes? (?:directly|straight)\b/i,
+    /\bcalm,?\s+neutral\b/i,
+  ];
+  return story
+    .split(/(?<=[.!?])\s+/)
+    .map(s => s.trim())
+    .filter(s => s && !photoDescPatterns.some(p => p.test(s)))
+    .join(' ')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+// Re-run the cleanup whenever this version bumps
+const PHOTO_DESC_CLEANUP_VERSION = '3';
 function cleanupOldPhotoDescriptions() {
-  if (localStorage.getItem('gm_cleaned_photo_descs') === '1') return;
+  if (localStorage.getItem('gm_photo_desc_cleanup_v') === PHOTO_DESC_CLEANUP_VERSION) return;
   const memories = (() => { try { return JSON.parse(localStorage.getItem('gm_people') || '[]'); } catch { return []; } })();
   let changed = false;
   memories.forEach(p => {
     if (!p.story) return;
-    const before = p.story;
-    let s = p.story
-      .replace(/\.?\s*Photo description:[\s\S]*?(?=(\.\s+[A-Z])|$)/gi, '')
-      .replace(/\b(A|The)\s+(man|woman|boy|girl|young (?:adult )?(?:male|female)|person)\s+with\s+[^.]{10,300}\./gi, '')
-      .replace(/\s{2,}/g, ' ')
-      .trim();
-    if (s !== before) { p.story = s; changed = true; }
+    const cleaned = stripPhotoDescriptions(p.story);
+    if (cleaned !== p.story) { p.story = cleaned; changed = true; }
   });
   if (changed) localStorage.setItem('gm_people', JSON.stringify(memories));
-  localStorage.setItem('gm_cleaned_photo_descs', '1');
+  localStorage.setItem('gm_photo_desc_cleanup_v', PHOTO_DESC_CLEANUP_VERSION);
 }
 
 function addPerson(name, rel, story, photoB64) {
   const memories = getMemories();
+  const cleanStory = stripPhotoDescriptions(story || '');
   const existing = memories.find(m => m.name.toLowerCase() === name.toLowerCase());
   if (existing) {
     if (rel) existing.rel = rel;
-    if (story) existing.story = (existing.story ? existing.story + '. ' + story : story);
+    if (cleanStory) existing.story = stripPhotoDescriptions(existing.story ? existing.story + '. ' + cleanStory : cleanStory);
     if (photoB64) existing.photo = photoB64;
     existing.lastMentioned = Date.now();
     saveMemories(memories);
     return;
   }
   memories.push({
-    name, rel: rel || '', story: story || '', photo: photoB64 || '',
+    name, rel: rel || '', story: cleanStory, photo: photoB64 || '',
     voiceClip: null,   // base64 audio recorded by family member
     videoClip: null,    // base64 video intro
     lastMentioned: Date.now(),
@@ -500,10 +531,7 @@ function startChat() {
     }, 500);
   } else {
     setTimeout(() => {
-      const tod = getTimeOfDay();
-      const welcome = memories.length === 0
-        ? `Good ${tod}, ${name}. Tell me about the people in your life.`
-        : `Good ${tod}, ${name}. I'm here.`;
+      const welcome = `Hey ${name}, glad to see you again. What can I help you remember today?`;
       addMsg(welcome, 'gemma');
       saveToHistory('gemma', welcome);
       speak(welcome);
@@ -526,17 +554,10 @@ function startNewChat() {
   closeHistory?.();
   // Fresh greeting
   const name = localStorage.getItem('gm_name');
-  const memories = getMemories();
   setTimeout(() => {
-    const tod = getTimeOfDay();
-    let welcome;
-    if (!name) {
-      welcome = `Hello — I'm Gemma. What's your name?`;
-    } else if (memories.length === 0) {
-      welcome = `Good ${tod}, ${name}. What's on your mind?`;
-    } else {
-      welcome = `Good ${tod}, ${name}. I'm here.`;
-    }
+    const welcome = name
+      ? `Hey ${name}, glad to see you again. What can I help you remember today?`
+      : `Hello — I'm Gemma. What's your name?`;
     addMsg(welcome, 'gemma');
     saveToHistory('gemma', welcome);
     speak(welcome);
@@ -811,7 +832,7 @@ ${personPhoto ? 'A SAVED PHOTO OF THIS PERSON IS ATTACHED. Look at the image and
 
 INSTRUCTIONS:
 - If the user tells you their name (e.g. "I'm Maria" or "my name is John"), respond warmly and end with: [NAME:their_name]
-- If ${name} introduces someone ("this is my daughter Sarah"), respond warmly, end with: [SAVE:name:relationship:details]
+- If ${name} introduces someone ("this is my daughter Sarah"), respond warmly, end with: [SAVE:name:relationship:details]. The "details" field MUST be a short personal note of what ${name} actually said about them (e.g. "lives in Phoenix, calls every Sunday"). NEVER describe physical appearance from a photo — no hair, skin, clothing, posture, expression, or background. Just personal facts ${name} shared.
 - If ${name} adds info about someone known, end with: [UPDATE:name:new info]
 - If ${name} asks WHO someone is — "who is my son", "who is Emma", "show me my daughter" — emit [SHOW:name_or_relationship] (e.g. [SHOW:son], [SHOW:Emma], [SHOW:daughter]). The app will display their photo and play their voice clip if available. Keep your spoken reply short and warm.
 - If ${name} asks to be reminded of ANYTHING — pills/medication, doctor appointments, birthdays, parties, errands — emit [REMIND:type:title:datetime:recurrence:personId].
