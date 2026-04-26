@@ -479,7 +479,10 @@ function startChat() {
 
   const history = getHistory();
   const today = new Date().toDateString();
-  const todayMsgs = history.filter(m => new Date(m.ts).toDateString() === today);
+  const sessionStart = parseInt(localStorage.getItem('gm_session_start') || '0', 10);
+  const todayMsgs = history.filter(m =>
+    new Date(m.ts).toDateString() === today && m.ts >= sessionStart
+  );
 
   if (todayMsgs.length > 0) {
     todayMsgs.forEach(m => {
@@ -505,6 +508,38 @@ function startChat() {
       saveToHistory('gemma', welcome);
     }, 400);
   }
+}
+
+function startNewChat() {
+  if (!confirm("Start a new chat? Your past conversations will still be in History, and Gemma will still remember everyone she knows.")) return;
+  // Mark a fresh session start — past msgs stay in gm_history but won't paint into today's chat view
+  localStorage.setItem('gm_session_start', Date.now().toString());
+  // Reset in-memory short-term context
+  chatHistory.length = 0;
+  // Clear chat DOM
+  const msgs = document.getElementById('chatMessages');
+  if (msgs) msgs.innerHTML = '';
+  stopSpeaking();
+  // Close any open panels
+  closeReminders?.();
+  closeHistory?.();
+  // Fresh greeting
+  const name = localStorage.getItem('gm_name');
+  const memories = getMemories();
+  setTimeout(() => {
+    const tod = getTimeOfDay();
+    let welcome;
+    if (!name) {
+      welcome = `Hello — I'm Gemma. What's your name?`;
+    } else if (memories.length === 0) {
+      welcome = `Good ${tod}, ${name}. What's on your mind?`;
+    } else {
+      welcome = `Good ${tod}, ${name}. I'm here.`;
+    }
+    addMsg(welcome, 'gemma');
+    saveToHistory('gemma', welcome);
+    speak(welcome);
+  }, 250);
 }
 
 function getTimeOfDay() {
