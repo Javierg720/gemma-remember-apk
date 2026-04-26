@@ -30,6 +30,10 @@ function stripPhotoDescriptions(story) {
     /\b(?:single|one)\s+(?:young|adult|elderly)?\s*(?:man|woman|male|female|person)\s+with\b/i,
     /\bgazes? (?:directly|straight)\b/i,
     /\bcalm,?\s+neutral\b/i,
+    /^\.?\s*The (?:background|backdrop|setting) (?:is|appears|features)\b/i,
+    /\bstudio (?:backdrop|background)\b/i,
+    /\b(?:simple|plain),?\s+solid,?\s+(?:dark|light)?\s*(?:gray|grey|white|black|colored)\b/i,
+    /\bdark\s+gray\s+(?:studio|backdrop|background)/i,
   ];
   return story
     .split(/(?<=[.!?])\s+/)
@@ -41,7 +45,7 @@ function stripPhotoDescriptions(story) {
 }
 
 // Re-run the cleanup whenever this version bumps
-const PHOTO_DESC_CLEANUP_VERSION = '3';
+const PHOTO_DESC_CLEANUP_VERSION = '4';
 function cleanupOldPhotoDescriptions() {
   if (localStorage.getItem('gm_photo_desc_cleanup_v') === PHOTO_DESC_CLEANUP_VERSION) return;
   const memories = (() => { try { return JSON.parse(localStorage.getItem('gm_people') || '[]'); } catch { return []; } })();
@@ -1709,7 +1713,6 @@ function personCardHtml(person) {
     ? `<img class="pcard-photo" src="data:image/jpeg;base64,${person.photo}" alt="${person.name}">`
     : `<div class="pcard-photo pcard-no-photo">${(person.name || '?')[0].toUpperCase()}</div>`;
   const rel = person.rel ? `<div class="pcard-rel">${escapeHtml(person.rel)}</div>` : '';
-  const story = person.story ? `<div class="pcard-story">${escapeHtml(person.story).slice(0, 200)}</div>` : '';
   let audio = '';
   if (person.voiceClip) {
     const src = `data:audio/webm;base64,${person.voiceClip}`;
@@ -1726,7 +1729,6 @@ function personCardHtml(person) {
       <div class="pcard-info">
         <div class="pcard-name">${escapeHtml(person.name)}</div>
         ${rel}
-        ${story}
         ${audio}
         ${video}
       </div>
