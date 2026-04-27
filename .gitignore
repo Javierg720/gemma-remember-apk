@@ -4,3 +4,8 @@ android/build/
 *.apk
 *.jks
 .vercel
+ios/App/Pods/
+ios/App/build/
+ios/DerivedData/
+*.ipa
+

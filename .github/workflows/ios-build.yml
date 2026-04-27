@@ -1,0 +1,68 @@
+name: Build iOS IPA (unsigned, for sideloading)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master, main]
+    paths:
+      - 'src/**'
+      - 'capacitor.config.json'
+      - 'package.json'
+      - '.github/workflows/ios-build.yml'
+
+jobs:
+  build:
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install npm deps
+        run: npm install
+
+      - name: Add iOS platform
+        run: npx cap add ios || echo "iOS platform already exists"
+
+      - name: Sync Capacitor
+        run: npx cap sync ios
+
+      - name: Install CocoaPods
+        run: |
+          cd ios/App
+          pod install --repo-update
+
+      - name: Build unsigned .app
+        run: |
+          cd ios/App
+          xcodebuild \
+            -workspace App.xcworkspace \
+            -scheme App \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            PROVISIONING_PROFILE="" \
+            ONLY_ACTIVE_ARCH=NO
+
+      - name: Package as .ipa (unsigned)
+        run: |
+          cd ios/App/build/Build/Products/Release-iphoneos
+          mkdir -p Payload
+          mv App.app Payload/
+          zip -r GemmaRemember-unsigned.ipa Payload
+          ls -la
+
+      - name: Upload .ipa artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gemma-remember-ios-unsigned
+          path: ios/App/build/Build/Products/Release-iphoneos/GemmaRemember-unsigned.ipa
+          retention-days: 30
