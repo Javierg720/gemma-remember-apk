@@ -10,10 +10,5 @@
   "android": {
     "allowMixedContent": false,
     "minWebViewVersion": 60
-  },
-  "plugins": {
-    "TextToSpeech": {
-      "language": "en-US"
-    }
   }
 }

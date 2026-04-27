@@ -26,12 +26,6 @@ jobs:
       - name: Install npm deps
         run: npm install
 
-      - name: Pin Capacitor SPM to 8.0.0 in TTS plugin
-        run: |
-          sed -i.bak 's|from: "8.0.0"|exact: "8.0.0"|g' \
-            node_modules/@capacitor-community/text-to-speech/Package.swift
-          cat node_modules/@capacitor-community/text-to-speech/Package.swift
-
       - name: Add iOS platform
         run: npx cap add ios || echo "iOS platform already exists"
 
