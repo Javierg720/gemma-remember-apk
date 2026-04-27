@@ -32,6 +32,23 @@ jobs:
       - name: Sync Capacitor
         run: npx cap sync ios
 
+      - name: Patch AppDelegate for Capacitor 8.3 API
+        run: |
+          # Capacitor 8.3 dropped the userActivity/restorationHandler overload
+          # of ApplicationDelegateProxy. Stub the func to just return true.
+          python3 <<'PY'
+          import re, pathlib
+          p = pathlib.Path("ios/App/App/AppDelegate.swift")
+          src = p.read_text()
+          new = re.sub(
+              r"return ApplicationDelegateProxy\.shared\.application\(\s*application,\s*continue:\s*userActivity,\s*restorationHandler:\s*restorationHandler\s*\)",
+              "return true",
+              src,
+          )
+          p.write_text(new)
+          print(new)
+          PY
+
       - name: Inspect iOS project layout
         run: |
           ls -la ios/App
